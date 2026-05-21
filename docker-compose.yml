@@ -21,17 +21,19 @@ services:
     restart: on-failure
 
   # Generates synthetic attack events and writes them to the shared syslog volume.
-  # To use real syslog, replace this service with a volume mount of your actual log file.
+  # Container is always created; set SYSLOG_GEN_ENABLED=false in .env to keep it stopped.
+  # To use a real host log, set HOST_SYSLOG_PATH on data-server (see .env.example).
   syslog-gen:
     build: .
-    command: python DataServer/syslog-gen.py
+    command: ["sh", "-c", "if [ \"$$SYSLOG_GEN_ENABLED\" = \"true\" ]; then exec python DataServer/syslog-gen.py; else echo '[syslog-gen] disabled via SYSLOG_GEN_ENABLED=false'; fi"]
     environment:
+      SYSLOG_GEN_ENABLED: ${SYSLOG_GEN_ENABLED:-true}
       SYSLOG_PATH: /var/log/attack-map/syslog
       HQ_IP: ${HQ_IP:-8.8.8.8}
       EVENT_RATE: ${EVENT_RATE:-5}
     volumes:
       - syslog-feed:/var/log/attack-map
-    restart: unless-stopped
+    restart: on-failure
 
   data-server:
     build: .
@@ -39,16 +41,16 @@ services:
     environment:
       REDIS_HOST: redis
       REDIS_PORT: 6379
-      SYSLOG_PATH: /var/log/attack-map/syslog
+      SYSLOG_PATH: ${SYSLOG_PATH:-/var/log/attack-map/syslog}
       GEOIP_DB_PATH: /geoip/GeoLite2-City.mmdb
       HQ_IP: ${HQ_IP:-8.8.8.8}
     volumes:
       - syslog-feed:/var/log/attack-map
       - geoip-db:/geoip:ro
+      - ${HOST_SYSLOG_PATH:-/dev/null}:/host-syslog:ro
     depends_on:
       - redis
       - geoip-init
-      - syslog-gen
     restart: unless-stopped
 
   attack-map-server:

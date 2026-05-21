@@ -34,6 +34,8 @@ Open **http://localhost:8888** — you'll see demo attack traffic immediately.
 
 The GeoIP database is cached in a Docker volume and only re-downloaded when it's older than `GEOIP_MAX_AGE_DAYS` (default 14).
 
+Demo mode is the default. Set `SYSLOG_GEN_ENABLED=false` in `.env` to stop the synthetic generator without removing its container (see [Using real syslog](#using-real-syslog) for pointing the stack at a real log file).
+
 ---
 
 ### Configuration
@@ -49,22 +51,44 @@ All settings live in `.env` (copy from `.env.example`):
 | `EVENT_RATE` | No | `5` | Demo events per second |
 | `ATTACK_MAP_PORT` | No | `8888` | Host port for the UI |
 | `GEOIP_MAX_AGE_DAYS` | No | `14` | Days before refreshing the GeoIP DB |
+| `SYSLOG_GEN_ENABLED` | No | `true` | `false` stops the synthetic generator; container stays created |
+| `HOST_SYSLOG_PATH` | No | — | Host file/dir bind-mounted read-only into `data-server` at `/host-syslog` |
+| `SYSLOG_PATH` | No | `/var/log/attack-map/syslog` | Container-side path `data-server` tails (set to `/host-syslog` when using a real log) |
 
 ---
 
 ### Using real syslog
 
-1. In `docker-compose.yml`, remove the `syslog-gen` service.
-2. Mount your log file into `data-server`:
+Everything is driven from `.env` — no YAML edits required.
 
-   ```yaml
-   data-server:
-     volumes:
-       - /var/log/my-firewall.log:/var/log/attack-map/syslog:ro
-       - geoip-db:/geoip:ro
+1. Stop the synthetic generator: `SYSLOG_GEN_ENABLED=false`.
+2. Point at your host log:
+
+   ```
+   HOST_SYSLOG_PATH=/var/log/auth.log    # absolute host path to a file or directory
+   SYSLOG_PATH=/host-syslog              # container-side path data-server tails
    ```
 
-3. Edit `DataServer/DataServer.py` → `parse_syslog()` to match your log format. The function must return a dict with keys `src_ip`, `dst_ip`, `src_port`, `dst_port`, `type_attack`, `cve_attack`, or `None` to skip the line.
+   If `HOST_SYSLOG_PATH` is a directory, set `SYSLOG_PATH=/host-syslog/<filename>` to pick the file inside it.
+
+3. Edit `parse_syslog()` in [DataServer/DataServer.py](DataServer/DataServer.py) to match your log format. The function must return a dict with keys `src_ip`, `dst_ip`, `src_port`, `dst_port`, `type_attack`, `cve_attack`, or `None` to skip the line.
+
+4. `docker compose up`.
+
+#### Multiple host log files
+
+`data-server` tails exactly one file (`SYSLOG_PATH`). For logs scattered across distinct host paths, drop a `docker-compose.override.yml` next to the main compose file — Compose auto-loads it — and add extra bind mounts:
+
+```yaml
+# docker-compose.override.yml
+services:
+  data-server:
+    volumes:
+      - /var/log/auth.log:/host-syslog/auth.log:ro
+      - /var/log/firewall.log:/host-syslog/firewall.log:ro
+```
+
+Then merge upstream into one file the data-server can tail (e.g. a small `tail -F a b >> merged` sidecar, or host-side syslog forwarding). Native multi-file tailing in `DataServer.py` is a possible follow-up.
 
 ---
 
