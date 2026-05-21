@@ -20,6 +20,11 @@
         <link href='https://api.mapbox.com/mapbox.js/plugins/leaflet-fullscreen/v1.0.1/leaflet.fullscreen.css' rel='stylesheet' />
         <link href='static/index.css'rel='stylesheet'/>
 
+        <script>
+            window.MAPBOX_TOKEN = {% raw json_encode(mapbox_token) %};
+            window.HQ_LAT_LNG = [{{ hq_lat }}, {{ hq_lng }}];
+        </script>
+
         <!--BOOTSTRAP CSS LINKS-->
         <link href="https://maxcdn.bootstrapcdn.com/bootstrap/3.3.6/css/bootstrap.min.css" rel="stylesheet" integrity="sha384-1q8mTJOASx8j1Au+a5WDVnPi2lkFfwwEAa8hDDdjZlpLegxhjVME1fgjWPGmkzs7" crossorigin="anonymous">
     </head>
