@@ -1,0 +1,73 @@
+services:
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    volumes:
+      - redis-data:/data
+
+  # One-shot init: downloads GeoLite2-City.mmdb into the shared geoip volume.
+  # Skips the download if the DB is already present and < GEOIP_MAX_AGE_DAYS old.
+  geoip-init:
+    image: alpine:3.20
+    environment:
+      MAXMIND_LICENSE_KEY: ${MAXMIND_LICENSE_KEY}
+      GEOIP_DB_PATH: /geoip/GeoLite2-City.mmdb
+      GEOIP_MAX_AGE_DAYS: ${GEOIP_MAX_AGE_DAYS:-14}
+    volumes:
+      - geoip-db:/geoip
+      - ./scripts/download-geoip.sh:/download-geoip.sh:ro
+    command: sh /download-geoip.sh
+    restart: on-failure
+
+  # Generates synthetic attack events and writes them to the shared syslog volume.
+  # To use real syslog, replace this service with a volume mount of your actual log file.
+  syslog-gen:
+    build: .
+    command: python DataServer/syslog-gen.py
+    environment:
+      SYSLOG_PATH: /var/log/attack-map/syslog
+      HQ_IP: ${HQ_IP:-8.8.8.8}
+      EVENT_RATE: ${EVENT_RATE:-5}
+    volumes:
+      - syslog-feed:/var/log/attack-map
+    restart: unless-stopped
+
+  data-server:
+    build: .
+    command: python DataServer/DataServer.py
+    environment:
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      SYSLOG_PATH: /var/log/attack-map/syslog
+      GEOIP_DB_PATH: /geoip/GeoLite2-City.mmdb
+      HQ_IP: ${HQ_IP:-8.8.8.8}
+    volumes:
+      - syslog-feed:/var/log/attack-map
+      - geoip-db:/geoip:ro
+    depends_on:
+      - redis
+      - geoip-init
+      - syslog-gen
+    restart: unless-stopped
+
+  attack-map-server:
+    build: .
+    command: python AttackMapServer/AttackMapServer.py
+    environment:
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      PORT: 8888
+      MAPBOX_TOKEN: ${MAPBOX_TOKEN}
+      HQ_LAT: ${HQ_LAT:-52.354551}
+      HQ_LNG: ${HQ_LNG:-4.7391558}
+    ports:
+      - "${ATTACK_MAP_PORT:-8888}:8888"
+    depends_on:
+      - redis
+    restart: unless-stopped
+
+volumes:
+  redis-data:
+  geoip-db:
+  syslog-feed:

@@ -1,15 +1,14 @@
-// To access by a browser in another computer, use the external IP of machine running AttackMapServer
-// from the same computer(only), you can use the internal IP.
-// Example:
-// - AttackMapServer machine:
-//   - Internal IP: 127.0.0.1
-//   - External IP: 192.168.11.106
-var webSock = new WebSocket("ws:/127.0.0.1:8888/websocket"); // Internal
-//var webSock = new WebSocket("ws:/192.168.1.100:8888/websocket"); // External
+// WebSocket URL is derived from the page's own host so the app works through
+// any reverse proxy / IP / port without source edits.
+var wsProto = window.location.protocol === "https:" ? "wss:" : "ws:";
+var webSock = new WebSocket(wsProto + "//" + window.location.host + "/websocket");
 
 // link map
 
-L.mapbox.accessToken = "pk.eyJ1IjoibW1heTYwMSIsImEiOiJjaWgyYWU3NWQweWx2d3ltMDl4eGk5eWY1In0.9YoOkALPP7zaoim34ZITxw";
+if (!window.MAPBOX_TOKEN) {
+    console.warn("MAPBOX_TOKEN is not set; map tiles will not render. Set the MAPBOX_TOKEN env var on AttackMapServer.");
+}
+L.mapbox.accessToken = window.MAPBOX_TOKEN || "";
 var map = L.mapbox.map("map", "mapbox.dark", {
 center: [0, 0], // lat, long
 zoom: 2
@@ -18,8 +17,8 @@ zoom: 2
 // add full screen option
 L.control.fullscreen().addTo(map);
 
-// hq coords
-var hqLatLng = new L.LatLng(37.3845, -122.0881);
+// hq coords (injected by server from HQ_LAT / HQ_LNG env vars)
+var hqLatLng = new L.LatLng(window.HQ_LAT_LNG[0], window.HQ_LAT_LNG[1]);
 
 // hq marker
 L.circle(hqLatLng, 110000, {
