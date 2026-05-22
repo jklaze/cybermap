@@ -42,12 +42,15 @@ services:
       REDIS_HOST: redis
       REDIS_PORT: 6379
       SYSLOG_PATH: ${SYSLOG_PATH:-/var/log/attack-map/syslog}
+      SYSLOG_PATHS: ${SYSLOG_PATHS:-}
+      PARSERS_PATH: /etc/cybermap/parsers.yml
       GEOIP_DB_PATH: /geoip/GeoLite2-City.mmdb
       HQ_IP: ${HQ_IP:-8.8.8.8}
     volumes:
       - syslog-feed:/var/log/attack-map
       - geoip-db:/geoip:ro
       - ${HOST_SYSLOG_PATH:-/dev/null}:/host-syslog:ro
+      - ${HOST_PARSERS_PATH:-./DataServer/parsers.yml}:/etc/cybermap/parsers.yml:ro
     depends_on:
       - redis
       - geoip-init

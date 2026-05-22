@@ -1,3 +1,4 @@
 maxminddb==1.5.4
+pyyaml==6.0.2
 redis==5.0.8
 tornado==6.4.1

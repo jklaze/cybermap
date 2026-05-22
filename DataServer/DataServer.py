@@ -1,28 +1,37 @@
 #!/usr/bin/env python3
 """
-Tails a syslog file, parses attack events, geolocates the source IP against
-the MaxMind GeoLite2-City database, and publishes the result to Redis.
+Tails one or more syslog files, parses attack events using a declarative
+regex config, geolocates the source IP against the MaxMind GeoLite2-City
+database, and publishes the result to Redis.
 
 Configuration is via environment variables:
   REDIS_HOST          (default 127.0.0.1)
   REDIS_PORT          (default 6379)
   REDIS_CHANNEL       (default attack-map-production)
+  SYSLOG_PATHS        Comma-separated list of files to tail.
+                      Falls back to SYSLOG_PATH if unset.
   SYSLOG_PATH         (default /var/log/attack-map/syslog)
+  PARSERS_PATH        (default /etc/cybermap/parsers.yml)
   GEOIP_DB_PATH       (default /geoip/GeoLite2-City.mmdb)
   HQ_IP               (default 8.8.8.8)
   TAIL_POLL_INTERVAL  (default 0.1)
 """
 
+import fnmatch
 import io
 import json
 import logging
 import os
+import queue
+import re
 import signal
 import sys
+import threading
 from time import localtime, sleep, strftime
 
 import maxminddb
 import redis
+import yaml
 
 from const import META, PORTMAP
 
@@ -30,9 +39,75 @@ REDIS_HOST = os.environ.get("REDIS_HOST", "127.0.0.1")
 REDIS_PORT = int(os.environ.get("REDIS_PORT", "6379"))
 REDIS_CHANNEL = os.environ.get("REDIS_CHANNEL", "attack-map-production")
 SYSLOG_PATH = os.environ.get("SYSLOG_PATH", "/var/log/attack-map/syslog")
+SYSLOG_PATHS = [
+    p.strip()
+    for p in os.environ.get("SYSLOG_PATHS", SYSLOG_PATH).split(",")
+    if p.strip()
+]
+PARSERS_PATH = os.environ.get("PARSERS_PATH", "/etc/cybermap/parsers.yml")
 GEOIP_DB_PATH = os.environ.get("GEOIP_DB_PATH", "/geoip/GeoLite2-City.mmdb")
 HQ_IP = os.environ.get("HQ_IP", "8.8.8.8")
 TAIL_POLL_INTERVAL = float(os.environ.get("TAIL_POLL_INTERVAL", "0.1"))
+
+REQUIRED_FIELDS = ("src_ip", "dst_ip", "src_port", "dst_port", "type_attack", "cve_attack")
+
+# Built-in named formats: a user writes `format: <name>` in parsers.yml
+# instead of authoring a regex. Each entry's `regex` uses named groups for
+# whatever it can pull out of the line; the rest comes from `defaults`.
+BUILTIN_FORMATS = {
+    # Synthetic generator used by syslog-gen.py.
+    "demo-csv": {
+        "regex": r"(?P<src_ip>[^,\s]+),(?P<dst_ip>[^,\s]+),(?P<src_port>\d+),(?P<dst_port>\d+),(?P<type_attack>[^,\s]+),(?P<cve_attack>[^,\s]+)\s*$",
+        "defaults": {},
+    },
+    # Linux sshd "Failed password" lines (Debian /var/log/auth.log,
+    # RHEL /var/log/secure). Optional "invalid user" prefix handled.
+    "sshd-auth": {
+        "regex": r"sshd\[\d+\]:\s+Failed password for (?:invalid user )?\S+ from (?P<src_ip>\S+) port (?P<src_port>\d+)",
+        "defaults": {
+            "dst_ip": "0.0.0.0",
+            "dst_port": "22",
+            "type_attack": "ssh-bruteforce",
+            "cve_attack": "N/A",
+        },
+    },
+    # UFW firewall BLOCK lines (TCP/UDP). ICMP-only blocks lack SPT/DPT
+    # and will not match — that's intentional.
+    "ufw": {
+        "regex": r"\[UFW BLOCK\].*SRC=(?P<src_ip>\S+).*DST=(?P<dst_ip>\S+).*PROTO=(?P<type_attack>\S+).*SPT=(?P<src_port>\d+).*DPT=(?P<dst_port>\d+)",
+        "defaults": {"cve_attack": "N/A"},
+    },
+    # nginx "combined" access log (the default for most distros).
+    "nginx-access": {
+        "regex": r'^(?P<src_ip>\S+) \S+ \S+ \[[^\]]+\] "(?P<type_attack>\S+) [^"]*" \d+ \d+',
+        "defaults": {
+            "dst_ip": "0.0.0.0",
+            "src_port": "0",
+            "dst_port": "80",
+            "cve_attack": "N/A",
+        },
+    },
+    # Apache "combined" access log (same shape as nginx-combined).
+    "apache-access": {
+        "regex": r'^(?P<src_ip>\S+) \S+ \S+ \[[^\]]+\] "(?P<type_attack>\S+) [^"]*" \d+ \d+',
+        "defaults": {
+            "dst_ip": "0.0.0.0",
+            "src_port": "0",
+            "dst_port": "80",
+            "cve_attack": "N/A",
+        },
+    },
+    # fail2ban "Ban <ip>" action lines.
+    "fail2ban": {
+        "regex": r"fail2ban\.actions.*\[(?P<type_attack>[^\]]+)\] Ban (?P<src_ip>\S+)",
+        "defaults": {
+            "dst_ip": "0.0.0.0",
+            "src_port": "0",
+            "dst_port": "0",
+            "cve_attack": "N/A",
+        },
+    },
+}
 
 log = logging.getLogger("data-server")
 
@@ -43,6 +118,84 @@ ips_tracked: dict = {}
 country_to_code: dict = {}
 ip_to_code: dict = {}
 unknowns: dict = {}
+
+
+class Parser:
+    __slots__ = ("name", "match", "regex", "defaults")
+
+    def __init__(self, name: str, match: str, regex: str, defaults: dict):
+        self.name = name
+        self.match = match
+        self.regex = re.compile(regex)
+        self.defaults = defaults
+
+
+def load_parsers(path: str) -> list:
+    """Load and compile parser rules from a YAML file.
+
+    Each entry must have `match:` plus either `format:` (a built-in name from
+    BUILTIN_FORMATS) or `regex:` (a custom pattern with named groups). User
+    `defaults:` are merged on top of the built-in defaults when using `format:`.
+    """
+    with open(path) as f:
+        data = yaml.safe_load(f) or []
+    if not isinstance(data, list):
+        log.error("%s must contain a YAML list at the top level", path)
+        sys.exit(1)
+    parsers = []
+    for i, entry in enumerate(data):
+        try:
+            match = entry["match"]
+            user_defaults = entry.get("defaults") or {}
+
+            if "format" in entry and "regex" in entry:
+                log.error("parsers.yml entry #%d: use either `format:` or `regex:`, not both", i)
+                sys.exit(1)
+
+            if "format" in entry:
+                fmt_name = entry["format"]
+                fmt = BUILTIN_FORMATS.get(fmt_name)
+                if not fmt:
+                    log.error(
+                        "parsers.yml entry #%d: unknown format %r (available: %s)",
+                        i, fmt_name, sorted(BUILTIN_FORMATS),
+                    )
+                    sys.exit(1)
+                regex = fmt["regex"]
+                defaults = {**fmt["defaults"], **user_defaults}
+                name = entry.get("name", fmt_name)
+            elif "regex" in entry:
+                regex = entry["regex"]
+                defaults = user_defaults
+                name = entry.get("name", f"parser-{i}")
+            else:
+                log.error("parsers.yml entry #%d: must specify `format:` or `regex:`", i)
+                sys.exit(1)
+
+            parsers.append(Parser(name=name, match=match, regex=regex, defaults=defaults))
+        except (KeyError, re.error) as exc:
+            log.error("invalid parser entry #%d in %s: %s", i, path, exc)
+            sys.exit(1)
+    if not parsers:
+        log.error("no parsers defined in %s", path)
+        sys.exit(1)
+    log.info("loaded %d parser(s) from %s", len(parsers), path)
+    return parsers
+
+
+def parse_line(source_path: str, line: str, parsers: list):
+    """Apply parsers in order. First entry that matches the source and produces all six fields wins."""
+    for p in parsers:
+        if not fnmatch.fnmatch(source_path, p.match):
+            continue
+        m = p.regex.search(line)
+        if not m:
+            continue
+        out = dict(p.defaults)
+        out.update({k: v for k, v in m.groupdict().items() if v is not None})
+        if all(out.get(f) is not None for f in REQUIRED_FIELDS):
+            return {f: out[f] for f in REQUIRED_FIELDS}
+    return None
 
 
 def clean_db(unclean: dict) -> dict:
@@ -71,24 +224,6 @@ def get_tcp_udp_proto(src_port, dst_port) -> str:
     if dst_port in PORTMAP:
         return PORTMAP[dst_port]
     return "OTHER"
-
-
-def parse_syslog(line: str):
-    """Default parser for the `src_ip,dst_ip,src_port,dst_port,type,cve` demo format."""
-    parts = line.split()
-    if not parts:
-        return None
-    fields = parts[-1].split(",")
-    if len(fields) != 6:
-        return None
-    return {
-        "src_ip": fields[0],
-        "dst_ip": fields[1],
-        "src_port": fields[2],
-        "dst_port": fields[3],
-        "type_attack": fields[4],
-        "cve_attack": fields[5],
-    }
 
 
 def lookup_ip(reader, ip: str):
@@ -165,6 +300,23 @@ def tail(path: str):
             yield line
 
 
+def tail_all(paths: list):
+    """Yield (source_path, line) tuples from a shared queue fed by one tail thread per file."""
+    q: queue.Queue = queue.Queue(maxsize=10_000)
+
+    def worker(p: str) -> None:
+        for line in tail(p):
+            q.put((p, line))
+
+    for p in paths:
+        wait_for_file(p, "syslog input file")
+        threading.Thread(target=worker, args=(p,), daemon=True).start()
+        log.info("tailing %s", p)
+
+    while True:
+        yield q.get()
+
+
 def report_stats() -> None:
     log.info("event_count=%d", event_count)
     log.info("continents=%s", continents_tracked)
@@ -188,16 +340,17 @@ def main() -> None:
     install_signal_handlers()
 
     wait_for_file(GEOIP_DB_PATH, "GeoLite2 database")
-    wait_for_file(SYSLOG_PATH, "syslog input file")
+    wait_for_file(PARSERS_PATH, "parser config")
+    parsers = load_parsers(PARSERS_PATH)
 
     reader = maxminddb.open_database(GEOIP_DB_PATH)
     hq_dict = find_hq_lat_long(reader, HQ_IP)
 
     r = connect_redis()
-    log.info("tailing %s, publishing to %s", SYSLOG_PATH, REDIS_CHANNEL)
+    log.info("publishing to channel %s", REDIS_CHANNEL)
 
-    for line in tail(SYSLOG_PATH):
-        parsed = parse_syslog(line)
+    for source_path, line in tail_all(SYSLOG_PATHS):
+        parsed = parse_line(source_path, line, parsers)
         if not parsed:
             continue
 

@@ -1,0 +1,63 @@
+# parsers.yml — tell data-server how to read each log source.
+#
+# Each entry has a `match:` (path glob, container-side) plus EITHER a
+# `format:` (built-in name, easy mode) or a `regex:` (custom pattern,
+# advanced).
+#
+# Built-in formats:
+#   demo-csv        — the synthetic generator that ships with this repo
+#   sshd-auth       — Linux sshd "Failed password" lines (auth.log / secure)
+#   ufw             — UFW firewall BLOCK lines (TCP/UDP)
+#   nginx-access    — nginx combined access log
+#   apache-access   — Apache combined access log
+#   fail2ban        — fail2ban "Ban <ip>" actions
+#
+# Entries are tried top-to-bottom; the first one whose match-glob fits
+# the source path AND whose regex matches the line wins. Lines no entry
+# matches are silently skipped.
+
+# Default: parse the synthetic generator's output.
+- match: "*"
+  format: demo-csv
+
+# --- Real logs: uncomment the line that matches yours ---
+#
+# - match: "/host-syslog/auth.log"
+#   format: sshd-auth
+#
+# - match: "/host-syslog/ufw.log"
+#   format: ufw
+#
+# - match: "/host-syslog/nginx-access.log"
+#   format: nginx-access
+#
+# - match: "/host-syslog/apache-access.log"
+#   format: apache-access
+#
+# - match: "/host-syslog/fail2ban.log"
+#   format: fail2ban
+#
+# --- Tweak defaults without writing a regex ---
+#
+# If a built-in format gets the fields almost right, override individual
+# defaults under your entry. Note: regex captures always win — defaults
+# only fill in fields the regex doesn't extract.
+#
+# - match: "/host-syslog/nginx-https.log"
+#   format: nginx-access
+#   defaults:
+#     dst_port: "443"
+#
+# --- Advanced: fully custom regex ---
+#
+# Only needed if none of the built-ins match. Use named groups for any of
+# src_ip, dst_ip, src_port, dst_port, type_attack, cve_attack; supply the
+# rest via `defaults:`.
+#
+# - match: "/host-syslog/myapp.log"
+#   regex: '... (?P<src_ip>\S+) ... (?P<src_port>\d+) ...'
+#   defaults:
+#     dst_ip: "0.0.0.0"
+#     dst_port: "0"
+#     type_attack: "custom"
+#     cve_attack: "N/A"
