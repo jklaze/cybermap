@@ -14,3 +14,5 @@ DataServer/__pycache__/
 AttackMapServer/static/flags/*
 
 .claude/
+
+logs/

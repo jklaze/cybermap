@@ -1,6 +1,9 @@
+name: cybermap
+
 services:
 
   redis:
+    container_name: cm-redis
     image: redis:7-alpine
     restart: unless-stopped
     volumes:
@@ -9,6 +12,7 @@ services:
   # One-shot init: downloads GeoLite2-City.mmdb into the shared geoip volume.
   # Skips the download if the DB is already present and < GEOIP_MAX_AGE_DAYS old.
   geoip-init:
+    container_name: cm-geoip-init
     image: alpine:3.20
     environment:
       MAXMIND_LICENSE_KEY: ${MAXMIND_LICENSE_KEY}
@@ -24,6 +28,7 @@ services:
   # Container is always created; set SYSLOG_GEN_ENABLED=false in .env to keep it stopped.
   # To use a real host log, set HOST_SYSLOG_PATH on data-server (see .env.example).
   syslog-gen:
+    container_name: cm-syslog-gen
     build: .
     command: ["sh", "-c", "if [ \"$$SYSLOG_GEN_ENABLED\" = \"true\" ]; then exec python DataServer/syslog-gen.py; else echo '[syslog-gen] disabled via SYSLOG_GEN_ENABLED=false'; fi"]
     environment:
@@ -36,6 +41,7 @@ services:
     restart: on-failure
 
   data-server:
+    container_name: cm-data-feed
     build: .
     command: python DataServer/DataServer.py
     environment:
@@ -57,6 +63,7 @@ services:
     restart: unless-stopped
 
   attack-map-server:
+    container_name: cm-attack-map
     build: .
     command: python AttackMapServer/AttackMapServer.py
     environment:
