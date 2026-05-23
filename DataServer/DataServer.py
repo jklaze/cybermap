@@ -41,9 +41,9 @@ REDIS_CHANNEL = os.environ.get("REDIS_CHANNEL", "attack-map-production")
 SYSLOG_PATH = os.environ.get("SYSLOG_PATH", "/var/log/attack-map/syslog")
 SYSLOG_PATHS = [
     p.strip()
-    for p in os.environ.get("SYSLOG_PATHS", SYSLOG_PATH).split(",")
+    for p in os.environ.get("SYSLOG_PATHS", "").split(",")
     if p.strip()
-]
+] or [SYSLOG_PATH]
 PARSERS_PATH = os.environ.get("PARSERS_PATH", "/etc/cybermap/parsers.yml")
 GEOIP_DB_PATH = os.environ.get("GEOIP_DB_PATH", "/geoip/GeoLite2-City.mmdb")
 HQ_IP = os.environ.get("HQ_IP", "8.8.8.8")

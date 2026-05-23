@@ -8,14 +8,19 @@ var webSock = new WebSocket(wsProto + "//" + window.location.host + "/websocket"
 if (!window.MAPBOX_TOKEN) {
     console.warn("MAPBOX_TOKEN is not set; map tiles will not render. Set the MAPBOX_TOKEN env var on AttackMapServer.");
 }
-L.mapbox.accessToken = window.MAPBOX_TOKEN || "";
-var map = L.mapbox.map("map", "mapbox.dark", {
-center: [0, 0], // lat, long
-zoom: 2
+
+var map = L.map("map", {
+    center: [0, 0],
+    zoom: 2
 });
 
-// add full screen option
-L.control.fullscreen().addTo(map);
+L.tileLayer('https://api.mapbox.com/styles/v1/{id}/tiles/{z}/{x}/{y}@2x?access_token={accessToken}', {
+    attribution: '© <a href="https://www.mapbox.com/">Mapbox</a>',
+    tileSize: 512,
+    zoomOffset: -1,
+    id: 'mapbox/dark-v11',
+    accessToken: window.MAPBOX_TOKEN || ''
+}).addTo(map);
 
 // hq coords (injected by server from HQ_LAT / HQ_LNG env vars)
 var hqLatLng = new L.LatLng(window.HQ_LAT_LNG[0], window.HQ_LAT_LNG[1]);
