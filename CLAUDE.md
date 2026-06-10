@@ -29,6 +29,8 @@ All config is via environment variables (no source edits required):
 |----------|---------|-----------|
 | `REDIS_HOST` / `REDIS_PORT` | `127.0.0.1` / `6379` | Both services |
 | `SYSLOG_PATH` | `/var/log/attack-map/syslog` | DataServer, syslog-gen |
+| `SYSLOG_PATHS` | — | DataServer: comma-separated files to tail in parallel; takes precedence over `SYSLOG_PATH` |
+| `PARSERS_PATH` | `/etc/cybermap/parsers.yml` | DataServer (parser rules YAML) |
 | `GEOIP_DB_PATH` | `/geoip/GeoLite2-City.mmdb` | DataServer |
 | `HQ_IP` | `8.8.8.8` | DataServer (geolocated to compute HQ lat/lng) |
 | `MAPBOX_TOKEN` | — | AttackMapServer → index.html template |
@@ -48,11 +50,18 @@ docker compose logs -f data-server
 
 # Force refresh the GeoIP DB
 docker compose rm -f geoip-init && docker compose up geoip-init
+
+# Run tests
+python3 -m pytest tests/
 ```
+
+## Real host log sources
+
+Host logs are fed in via `docker-compose.override.yml` (gitignored; example in `docker-compose.override.example.yml`): one read-only bind mount of each source's **parent directory** under `/host-logs/<name>`, plus `SYSLOG_PATHS` listing the files. Never bind-mount individual log files (rotation swaps the inode and the mount goes stale) and never gather sources via symlinks (they dangle inside the container). `tail()` in `DataServer/DataServer.py` is rotation-aware: it reopens on inode change or truncation — covered by `tests/test_tail.py`.
 
 ## Customizing the syslog parser
 
-`parse_syslog()` in `DataServer/DataServer.py` is the only function that needs editing for real deployments. It must return a dict with `src_ip`, `dst_ip`, `src_port`, `dst_port`, `type_attack`, `cve_attack`, or `None` to skip the line. The default format is `<src_ip>,<dst_ip>,<sport>,<dport>,<type>,<cve>` as the last whitespace-separated token on each line.
+Parsing is declarative via `parsers.yml` (path set by `PARSERS_PATH`). Each entry maps a container-path glob (`match:`) to a built-in `format:` from `BUILTIN_FORMATS` in `DataServer/DataServer.py` (demo-csv, sshd-auth, ufw, nginx-access, apache-access, fail2ban) or a custom `regex:` with named groups. A parse must yield `src_ip`, `dst_ip`, `src_port`, `dst_port`, `type_attack`, `cve_attack` (regex groups merged over `defaults:`), or the line is skipped.
 
 ## Dependencies
 

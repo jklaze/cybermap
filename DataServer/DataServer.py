@@ -287,17 +287,40 @@ def connect_redis() -> "redis.Redis":
 
 
 def tail(path: str):
-    """Yield lines appended to `path`, starting from EOF."""
-    with io.open(path, "r", encoding="ISO-8859-1") as f:
-        f.seek(0, io.SEEK_END)
+    """Yield lines appended to `path`, starting from EOF.
+
+    Survives log rotation: when the file at `path` is renamed and recreated
+    (logrotate default) or truncated in place (copytruncate), the file is
+    reopened and reading continues from the start of the new content.
+    """
+    # Open eagerly (not on first next()) so the start position is fixed at
+    # call time and open errors surface immediately.
+    f = io.open(path, "r", encoding="ISO-8859-1")
+    f.seek(0, io.SEEK_END)
+    return _follow(path, f)
+
+
+def _follow(path: str, f):
+    try:
         while True:
             where = f.tell()
             line = f.readline()
-            if not line:
-                sleep(TAIL_POLL_INTERVAL)
-                f.seek(where)
+            if line:
+                yield line
                 continue
-            yield line
+            sleep(TAIL_POLL_INTERVAL)
+            f.seek(where)
+            try:
+                st = os.stat(path)
+            except FileNotFoundError:
+                # mid-rotation: old file renamed, new one not created yet
+                continue
+            if st.st_ino != os.fstat(f.fileno()).st_ino or st.st_size < where:
+                log.info("rotation detected on %s; reopening", path)
+                f.close()
+                f = io.open(path, "r", encoding="ISO-8859-1")
+    finally:
+        f.close()
 
 
 def tail_all(paths: list):

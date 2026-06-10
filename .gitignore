@@ -11,10 +11,9 @@ AttackMapServer/dump.rdb
 
 DataServerDB/GeoLite2-City.mmdb
 DataServerDB/GeoLite2-City.mmdb.gz
-DataServer/__pycache__/
+__pycache__/
+.pytest_cache/
 
 AttackMapServer/static/flags/*
 
 .claude/
-
-logs/

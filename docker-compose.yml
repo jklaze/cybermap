@@ -28,7 +28,8 @@ services:
 
   # Generates synthetic attack events and writes them to the shared syslog volume.
   # Container is always created; set SYSLOG_GEN_ENABLED=false in .env to keep it stopped.
-  # To use a real host log, set HOST_SYSLOG_PATH on data-server (see .env.example).
+  # To feed real host logs, add per-source volume mounts in a
+  # docker-compose.override.yml (see docker-compose.override.example.yml).
   syslog-gen:
     container_name: cm-syslog-gen
     build: .
@@ -59,8 +60,10 @@ services:
     volumes:
       - syslog-feed:/var/log/attack-map
       - geoip-db:/geoip:ro
-      - ${HOST_SYSLOG_PATH:-/dev/null}:/host-syslog:ro
       - ${HOST_PARSERS_PATH:-./DataServer/parsers.yml}:/etc/cybermap/parsers.yml:ro
+      # Real host log sources are added here via docker-compose.override.yml —
+      # one read-only *directory* mount per source. See
+      # docker-compose.override.example.yml for the pattern.
     depends_on:
       - redis
       - geoip-init

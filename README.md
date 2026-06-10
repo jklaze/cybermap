@@ -34,7 +34,7 @@ Open **http://localhost:8888** — you'll see demo attack traffic immediately.
 
 The GeoIP database is cached in a Docker volume and only re-downloaded when it's older than `GEOIP_MAX_AGE_DAYS` (default 14).
 
-Demo mode is the default. Set `SYSLOG_GEN_ENABLED=false` in `.env` to stop the synthetic generator without removing its container (see [Using real syslog](#using-real-syslog) for pointing the stack at a real log file).
+Demo mode is the default. Set `SYSLOG_GEN_ENABLED=false` in `.env` to stop the synthetic generator without removing its container (see [Feeding real logs](#feeding-real-logs) for pointing the stack at real log files).
 
 ---
 
@@ -52,28 +52,47 @@ All settings live in `.env` (copy from `.env.example`):
 | `ATTACK_MAP_PORT` | No | `8888` | Host port for the UI |
 | `GEOIP_MAX_AGE_DAYS` | No | `14` | Days before refreshing the GeoIP DB |
 | `SYSLOG_GEN_ENABLED` | No | `true` | `false` stops the synthetic generator; container stays created |
-| `HOST_SYSLOG_PATH` | No | — | Host file/dir bind-mounted read-only into `data-server` at `/host-syslog` |
-| `SYSLOG_PATH` | No | `/var/log/attack-map/syslog` | Container-side path `data-server` tails (set to `/host-syslog` when using a real log) |
+| `SYSLOG_PATH` | No | `/var/log/attack-map/syslog` | Container-side path `data-server` tails (the demo feed by default) |
 | `SYSLOG_PATHS` | No | — | Comma-separated list of container-side files to tail in parallel. Takes precedence over `SYSLOG_PATH` |
 | `HOST_PARSERS_PATH` | No | `./DataServer/parsers.yml` | Host path to a parser-rules YAML file bind-mounted at `/etc/cybermap/parsers.yml` |
 
+Real host log sources are configured in `docker-compose.override.yml`, not `.env` — see [Feeding real logs](#feeding-real-logs).
+
 ---
 
-### Using real syslog
+### Feeding real logs
 
-Everything is driven from `.env` and a YAML rules file — no Python edits required. For common log shapes you just uncomment a two-line entry.
+Real host logs are wired in with two files — no Python edits, no changes to the committed `docker-compose.yml`:
+
+- **`docker-compose.override.yml`** (host-specific, gitignored) — one read-only bind mount per log source. Compose merges it into `docker-compose.yml` automatically.
+- **`SYSLOG_PATHS`** — the container-side files `data-server` tails (set in the override or in `.env`).
+
+Works with any number of sources, in any host directories, including rotated logs.
 
 1. Stop the synthetic generator in `.env`: `SYSLOG_GEN_ENABLED=false`.
-2. Point at your host log:
 
+2. Copy the example override and adjust it to your sources:
+
+   ```sh
+   cp docker-compose.override.example.yml docker-compose.override.yml
    ```
-   HOST_SYSLOG_PATH=/var/log/auth.log    # absolute host path to a file or directory
-   SYSLOG_PATH=/host-syslog              # container-side path data-server tails
+
+   ```yaml
+   services:
+     data-server:
+       volumes:
+         - /var/log:/host-logs/system:ro
+         - /opt/myapp/logs:/host-logs/myapp:ro
+       environment:
+         SYSLOG_PATHS: /host-logs/system/auth.log,/host-logs/myapp/access.log
    ```
 
-   If `HOST_SYSLOG_PATH` is a directory, set `SYSLOG_PATH=/host-syslog/<filename>` to pick the file inside it.
+   Two rules keep this robust:
 
-3. Open [DataServer/parsers.yml](DataServer/parsers.yml) and uncomment the entry for your log shape. The bundled built-in formats are:
+   - **Mount directories, not files.** Logrotate replaces a rotated file with a new inode; a file bind mount keeps pointing at the old inode and your map silently goes quiet. A directory mount always sees the current file, and `data-server` detects rotation (rename *and* copytruncate) and reopens automatically.
+   - **Don't gather sources with symlinks.** A symlink inside a bind-mounted folder resolves against the *container's* filesystem, where the target doesn't exist — it dangles. Mount each real directory instead, namespaced under `/host-logs/<name>`.
+
+3. Open [DataServer/parsers.yml](DataServer/parsers.yml) and uncomment/add an entry for each log shape. The bundled built-in formats are:
 
    | `format:` | Matches |
    |-----------|---------|
@@ -84,52 +103,22 @@ Everything is driven from `.env` and a YAML rules file — no Python edits requi
    | `fail2ban` | fail2ban "Ban &lt;ip&gt;" actions |
    | `demo-csv` | The bundled synthetic generator |
 
-   A typical entry is just two lines:
+   A typical entry is two lines per source (`match:` is a glob over the container path):
 
    ```yaml
-   - match: "/host-syslog"
+   - match: "/host-logs/system/auth.log"
      format: sshd-auth
+   - match: "/host-logs/myapp/access.log"
+     format: nginx-access
    ```
 
    If a format mostly works but a field is wrong, override it under `defaults:` (regex-captured fields always win — `defaults` only fills in what the regex doesn't capture). For unsupported log shapes, write a custom `regex:` with named groups — see the comments at the bottom of `parsers.yml`.
 
-4. `docker compose up`.
+4. `docker compose up -d`. Repeat steps 2–3 and `docker compose up -d` again whenever you add a source.
 
 `parsers.yml` is bind-mounted read-only, so editing it on the host and restarting `data-server` picks up the changes — no rebuilds. To keep your edits outside the repo, point `HOST_PARSERS_PATH` at any absolute host path in `.env`.
 
-#### Multiple host log files
-
-`data-server` natively tails any number of files in parallel via a thread per source. To use this:
-
-1. Bind-mount each host log into the container. The default `HOST_SYSLOG_PATH` mount accepts a directory, so the easiest setup is to point it at a directory containing (or symlinked to) every log you care about:
-
-   ```
-   HOST_SYSLOG_PATH=/var/log         # mounted at /host-syslog in the container
-   SYSLOG_PATHS=/host-syslog/auth.log,/host-syslog/nginx/access.log
-   ```
-
-   If your logs live in unrelated host directories, drop a `docker-compose.override.yml` next to `docker-compose.yml` with extra read-only bind mounts:
-
-   ```yaml
-   services:
-     data-server:
-       volumes:
-         - /var/log/auth.log:/host-syslog/auth.log:ro
-         - /opt/nginx/access.log:/host-syslog/nginx-access.log:ro
-   ```
-
-   Compose auto-loads the override, no flags needed.
-
-2. List each container path in `SYSLOG_PATHS` (comma-separated). `SYSLOG_PATHS` takes precedence over `SYSLOG_PATH`.
-
-3. Make sure `parsers.yml` has an entry for each source. With built-in formats it's two lines per source:
-
-   ```yaml
-   - match: "/host-syslog/auth.log"
-     format: sshd-auth
-   - match: "/host-syslog/nginx-access.log"
-     format: nginx-access
-   ```
+`data-server` tails every `SYSLOG_PATHS` entry in parallel (one thread per file, fed through a shared queue) and survives log rotation on each of them. To keep the demo feed running alongside real logs, include `/var/log/attack-map/syslog` in `SYSLOG_PATHS` and leave `SYSLOG_GEN_ENABLED=true`.
 
 ---
 

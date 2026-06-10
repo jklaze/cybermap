@@ -1,0 +1,28 @@
+# Feed real host logs into data-server.
+#
+# Copy this file to docker-compose.override.yml (gitignored, host-specific)
+# and adjust the mounts to your log sources. Docker Compose merges it into
+# docker-compose.yml automatically on `docker compose up`.
+#
+# Rules of thumb:
+#   - Mount the *parent directory* of each log file, never the file itself.
+#     Logrotate replaces files (new inode); a file bind mount keeps pointing
+#     at the rotated-away inode and goes silent. Directory mounts don't.
+#   - Never use symlinks to gather sources into one folder: a symlink inside
+#     a bind mount resolves against the *container's* filesystem and dangles.
+#   - Mount read-only (:ro) — data-server only reads.
+#   - Give each source a clear name under /host-logs/.
+#
+# Then list the files to tail in SYSLOG_PATHS (comma-separated, container
+# paths) — either here under `environment:` or in .env. Each file also needs
+# a matching parser rule (see DataServer/parsers.yml).
+
+services:
+  data-server:
+    volumes:
+      - /var/log:/host-logs/system:ro
+      # - /opt/myapp/logs:/host-logs/myapp:ro
+    environment:
+      SYSLOG_PATHS: /host-logs/system/auth.log,/host-logs/system/ufw.log
+      # To also keep the demo feed running alongside real logs, append it:
+      # SYSLOG_PATHS: /host-logs/system/auth.log,/var/log/attack-map/syslog
