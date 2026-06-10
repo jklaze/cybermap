@@ -8,6 +8,8 @@ services:
     restart: unless-stopped
     volumes:
       - redis-data:/data
+    networks:
+      - default
 
   # One-shot init: downloads GeoLite2-City.mmdb into the shared geoip volume.
   # Skips the download if the DB is already present and < GEOIP_MAX_AGE_DAYS old.
@@ -38,6 +40,8 @@ services:
       EVENT_RATE: ${EVENT_RATE:-5}
     volumes:
       - syslog-feed:/var/log/attack-map
+    networks:
+      - default
     restart: on-failure
 
   data-server:
@@ -60,6 +64,8 @@ services:
     depends_on:
       - redis
       - geoip-init
+    networks:
+      - default
     restart: unless-stopped
 
   attack-map-server:
@@ -73,11 +79,19 @@ services:
       MAPBOX_TOKEN: ${MAPBOX_TOKEN}
       HQ_LAT: ${HQ_LAT:-52.354551}
       HQ_LNG: ${HQ_LNG:-4.7391558}
-    ports:
-      - "${ATTACK_MAP_PORT:-8888}:8888"
     depends_on:
       - redis
+    expose:
+      - 8888
+    networks:
+      - jklaze_default
+      - default
     restart: unless-stopped
+
+networks:
+  jklaze_default:
+    external: true
+  default:
 
 volumes:
   redis-data:
