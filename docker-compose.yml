@@ -84,13 +84,10 @@ services:
     expose:
       - 8888
     networks:
-      - jklaze_default
       - default
     restart: unless-stopped
 
 networks:
-  jklaze_default:
-    external: true
   default:
 
 volumes:
