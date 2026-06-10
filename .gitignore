@@ -3,6 +3,7 @@
 
 env/
 .env
+docker-compose.override.yml
 
 dump.rdb
 DataServer/dump.rdb
