@@ -6,11 +6,26 @@ if (!window.MAPBOX_TOKEN) {
     console.warn("MAPBOX_TOKEN is not set; map tiles will not render. Set the MAPBOX_TOKEN env var on AttackMapServer.");
 }
 
+// Lock the map to the world's vertical extent: maxBounds (with full
+// viscosity) hard-stops drags at the top/bottom poles, while longitude is
+// left effectively unbounded so horizontal panning still wraps freely.
+var WORLD_LAT = 85.0511; // Web-Mercator latitude limit
 var map = L.map("map", {
     center: [0, 0],
     zoom: 2,
-    zoomControl: false
+    zoomControl: false,
+    maxBounds: [[-WORLD_LAT, -1e6], [WORLD_LAT, 1e6]],
+    maxBoundsViscosity: 1.0
 });
+
+// Keep the world at least as tall as the viewport (world height in CSS px is
+// 256 * 2^zoom), so zooming out can never letterbox the map. setMinZoom also
+// corrects the current zoom if the new minimum exceeds it.
+function clampZoomToViewport() {
+    map.setMinZoom(Math.max(0, Math.ceil(Math.log2(map.getSize().y / 256))));
+}
+map.on("resize", clampZoomToViewport);
+clampZoomToViewport();
 
 L.tileLayer('https://api.mapbox.com/styles/v1/{id}/tiles/{z}/{x}/{y}@2x?access_token={accessToken}', {
     attribution: '© <a href="https://www.mapbox.com/">Mapbox</a>',
