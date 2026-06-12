@@ -34,6 +34,7 @@ All config is via environment variables (no source edits required):
 | `GEOIP_DB_PATH` | `/geoip/GeoLite2-City.mmdb` | DataServer |
 | `HQ_IP` | `8.8.8.8` | DataServer (geolocated to compute HQ lat/lng) |
 | `IGNORE_SRC_IPS` | — | DataServer: comma-separated source IPs/CIDRs (IPv4/IPv6) dropped before geolocation |
+| `LOG_LEVEL` | `INFO` | DataServer: set `DEBUG` for per-line parse-miss/geo-miss diagnostics |
 | `MAPBOX_TOKEN` | — | AttackMapServer → index.html template |
 | `HQ_LAT` / `HQ_LNG` | `37.3845` / `-122.0881` | AttackMapServer → index.html template |
 | `EVENT_RATE` | `5` | syslog-gen (events per second) |
@@ -59,6 +60,8 @@ python3 -m pytest tests/
 ## Real host log sources
 
 Host logs are fed in via `docker-compose.override.yml` (gitignored; example in `docker-compose.override.example.yml`): one read-only bind mount of each source's **parent directory** under `/host-logs/<name>`, plus `SYSLOG_PATHS` listing the files. Never bind-mount individual log files (rotation swaps the inode and the mount goes stale) and never gather sources via symlinks (they dangle inside the container). `tail()` in `DataServer/DataServer.py` is rotation-aware: it reopens on inode change or truncation — covered by `tests/test_tail.py`.
+
+Each `parsers.yml` `match:` glob must equal a `SYSLOG_PATHS` entry exactly — a mismatch silently drops every line. The pipeline logs a periodic `pipeline: read=N published=N parse_miss=N ignored=N geo_miss=N` tally (`stats_summary()`); set `LOG_LEVEL=DEBUG` for per-line parse-miss/geo-miss reasons.
 
 ## Customizing the syslog parser
 

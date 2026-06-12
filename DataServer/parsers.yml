@@ -15,26 +15,36 @@
 # Entries are tried top-to-bottom; the first one whose match-glob fits
 # the source path AND whose regex matches the line wins. Lines no entry
 # matches are silently skipped.
+#
+# IMPORTANT: each `match:` glob must line up with a path in SYSLOG_PATHS.
+# Real host logs are mounted under /host-logs/<name>/ (see
+# docker-compose.override.example.yml), so the globs below use that prefix.
+# A mismatch (e.g. /host-syslog/... vs /host-logs/...) silently drops every
+# line. Set LOG_LEVEL=DEBUG to see per-line parse-miss / geo-miss reasons.
+#
+# Note: a source only produces events if its lines carry a *public* source
+# IP. Logs like nginx error.log (worker notices, no client IP) can't be
+# geolocated and should be left out of SYSLOG_PATHS entirely.
 
 # Default: parse the synthetic generator's output.
-- match: "*"
+- match: "/var/log/attack-map/syslog"
   format: demo-csv
 
-# --- Real logs: uncomment the line that matches yours ---
+# --- Real logs: uncomment + adjust the path to match your SYSLOG_PATHS ---
 #
-# - match: "/host-syslog/auth.log"
+# - match: "/host-logs/system/auth.log"
 #   format: sshd-auth
 #
-# - match: "/host-syslog/ufw.log"
+# - match: "/host-logs/system/ufw.log"
 #   format: ufw
 #
-# - match: "/host-syslog/nginx-access.log"
+# - match: "/host-logs/nginx/access.log"
 #   format: nginx-access
 #
-# - match: "/host-syslog/apache-access.log"
+# - match: "/host-logs/apache/access.log"
 #   format: apache-access
 #
-# - match: "/host-syslog/fail2ban.log"
+# - match: "/host-logs/fail2ban/fail2ban.log"
 #   format: fail2ban
 #
 # --- Tweak defaults without writing a regex ---
@@ -43,7 +53,7 @@
 # defaults under your entry. Note: regex captures always win — defaults
 # only fill in fields the regex doesn't extract.
 #
-# - match: "/host-syslog/nginx-https.log"
+# - match: "/host-logs/nginx/https-access.log"
 #   format: nginx-access
 #   defaults:
 #     dst_port: "443"
@@ -54,7 +64,7 @@
 # src_ip, dst_ip, src_port, dst_port, type_attack, cve_attack; supply the
 # rest via `defaults:`.
 #
-# - match: "/host-syslog/myapp.log"
+# - match: "/host-logs/myapp/myapp.log"
 #   regex: '... (?P<src_ip>\S+) ... (?P<src_port>\d+) ...'
 #   defaults:
 #     dst_ip: "0.0.0.0"

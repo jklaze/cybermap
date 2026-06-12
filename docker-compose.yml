@@ -58,6 +58,7 @@ services:
       GEOIP_DB_PATH: /geoip/GeoLite2-City.mmdb
       HQ_IP: ${HQ_IP:-8.8.8.8}
       IGNORE_SRC_IPS: ${IGNORE_SRC_IPS:-}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
     volumes:
       - syslog-feed:/var/log/attack-map
       - geoip-db:/geoip:ro

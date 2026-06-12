@@ -28,7 +28,7 @@ import re
 import signal
 import sys
 import threading
-from time import localtime, sleep, strftime
+from time import localtime, monotonic, sleep, strftime
 
 import maxminddb
 import redis
@@ -52,6 +52,9 @@ TAIL_POLL_INTERVAL = float(os.environ.get("TAIL_POLL_INTERVAL", "0.1"))
 # Comma-separated source IPs / CIDRs to drop before geolocation (e.g. your own
 # IP so it doesn't flood the map). IPv4 and IPv6 both supported.
 IGNORE_SRC_IPS = os.environ.get("IGNORE_SRC_IPS", "")
+LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO").upper()
+# How often (seconds) to log the pipeline summary even when no events publish.
+STATS_INTERVAL = float(os.environ.get("STATS_INTERVAL", "30"))
 
 REQUIRED_FIELDS = ("src_ip", "dst_ip", "src_port", "dst_port", "type_attack", "cve_attack")
 
@@ -116,6 +119,10 @@ BUILTIN_FORMATS = {
 log = logging.getLogger("data-server")
 
 event_count = 0
+lines_read = 0
+parse_misses = 0
+ignored_count = 0
+geo_misses = 0
 continents_tracked: dict = {}
 countries_tracked: dict = {}
 ips_tracked: dict = {}
@@ -360,7 +367,11 @@ def tail_all(paths: list):
     q: queue.Queue = queue.Queue(maxsize=10_000)
 
     def worker(p: str) -> None:
+        first = True
         for line in tail(p):
+            if first:
+                log.info("first line received from %s", p)
+                first = False
             q.put((p, line))
 
     for p in paths:
@@ -372,8 +383,16 @@ def tail_all(paths: list):
         yield q.get()
 
 
+def stats_summary() -> str:
+    """One-line pipeline tally: how many lines came in and where they went."""
+    return (
+        f"read={lines_read} published={event_count} "
+        f"parse_miss={parse_misses} ignored={ignored_count} geo_miss={geo_misses}"
+    )
+
+
 def report_stats() -> None:
-    log.info("event_count=%d", event_count)
+    log.info("pipeline: %s", stats_summary())
     log.info("continents=%s", continents_tracked)
     log.info("countries=%s", countries_tracked)
     log.info("ips=%d unique", len(ips_tracked))
@@ -390,8 +409,11 @@ def install_signal_handlers() -> None:
 
 
 def main() -> None:
-    global event_count
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    global event_count, lines_read, parse_misses, ignored_count, geo_misses
+    logging.basicConfig(
+        level=getattr(logging, LOG_LEVEL, logging.INFO),
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    )
     install_signal_handlers()
 
     wait_for_file(GEOIP_DB_PATH, "GeoLite2 database")
@@ -408,16 +430,28 @@ def main() -> None:
     r = connect_redis()
     log.info("publishing to channel %s", REDIS_CHANNEL)
 
+    last_summary = monotonic()
     for source_path, line in tail_all(SYSLOG_PATHS):
+        lines_read += 1
+        now = monotonic()
+        if now - last_summary >= STATS_INTERVAL:
+            log.info("pipeline: %s", stats_summary())
+            last_summary = now
+
         parsed = parse_line(source_path, line, parsers)
         if not parsed:
+            parse_misses += 1
+            log.debug("parse-miss [%s] %s", source_path, line.rstrip()[:200])
             continue
 
         if is_ignored_ip(parsed["src_ip"], ignore_nets):
+            ignored_count += 1
             continue
 
         raw_geo = lookup_ip(reader, parsed["src_ip"])
         if not raw_geo:
+            geo_misses += 1
+            log.debug("geo-miss %s [%s]", parsed["src_ip"], source_path)
             continue
 
         event_count += 1
@@ -452,7 +486,8 @@ def main() -> None:
         r.publish(REDIS_CHANNEL, json.dumps(super_dict))
 
         if event_count % 50 == 0:
-            log.info("published %d events", event_count)
+            log.info("pipeline: %s", stats_summary())
+            last_summary = monotonic()
 
 
 if __name__ == "__main__":

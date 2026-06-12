@@ -50,6 +50,7 @@ All settings live in `.env` (copy from `.env.example`):
 | `HQ_LAT` / `HQ_LNG` | No | `37.3845` / `-122.0881` | Override HQ map marker position directly |
 | `EVENT_RATE` | No | `5` | Demo events per second |
 | `IGNORE_SRC_IPS` | No | — | Comma-separated source IPs/CIDRs (IPv4/IPv6) to drop before geolocation — e.g. your own IP so it doesn't flood the map |
+| `LOG_LEVEL` | No | `INFO` | `data-server` log verbosity; set `DEBUG` for per-line parse-miss/geo-miss diagnostics |
 | `ATTACK_MAP_PORT` | No | `8888` | Host port for the UI |
 | `GEOIP_MAX_AGE_DAYS` | No | `14` | Days before refreshing the GeoIP DB |
 | `SYSLOG_GEN_ENABLED` | No | `true` | `false` stops the synthetic generator; container stays created |
@@ -120,6 +121,24 @@ Works with any number of sources, in any host directories, including rotated log
 `parsers.yml` is bind-mounted read-only, so editing it on the host and restarting `data-server` picks up the changes — no rebuilds. To keep your edits outside the repo, point `HOST_PARSERS_PATH` at any absolute host path in `.env`.
 
 `data-server` tails every `SYSLOG_PATHS` entry in parallel (one thread per file, fed through a shared queue) and survives log rotation on each of them. To keep the demo feed running alongside real logs, include `/var/log/attack-map/syslog` in `SYSLOG_PATHS` and leave `SYSLOG_GEN_ENABLED=true`.
+
+#### Troubleshooting: real logs produce no events
+
+`data-server` logs a periodic pipeline tally so you can see where lines go:
+
+```
+pipeline: read=4213 published=0 parse_miss=4213 ignored=0 geo_miss=0
+```
+
+- **`parse_miss` high, `published=0`** — no parser matched. Almost always a
+  `match:` glob that doesn't equal the `SYSLOG_PATHS` entry (e.g. `/host-syslog/...`
+  vs `/host-logs/...`). Set `LOG_LEVEL=DEBUG` to see the exact unmatched lines and
+  which source they came from.
+- **`geo_miss` high** — lines parse, but the source IPs aren't in GeoLite2
+  (private/internal ranges). Expected for LAN traffic; only public IPs render.
+- **`read=0`** — nothing is being tailed: the file is quiet, or the mount/path is
+  wrong. `data-server` logs `first line received from <path>` once per source when
+  data starts flowing.
 
 ---
 
