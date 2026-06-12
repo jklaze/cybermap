@@ -98,8 +98,6 @@ class ClientHub:
 
         msg = {key: payload.get(key) for key in FORWARDED_KEYS}
         msg["type"] = payload.get("msg_type")
-        msg["type2"] = payload.get("msg_type2")
-        msg["type3"] = payload.get("msg_type3")
         msg["protocol"] = payload.get("protocol")
         msg["src_lat"] = payload.get("latitude")
         msg["src_long"] = payload.get("longitude")
@@ -122,6 +120,7 @@ class IndexHandler(tornado.web.RequestHandler):
             mapbox_token=MAPBOX_TOKEN,
             hq_lat=HQ_LAT,
             hq_lng=HQ_LNG,
+            service_rgb=SERVICE_RGB,
         )
 
 

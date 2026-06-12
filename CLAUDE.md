@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Overview
 
-A real-time GeoIP cyber-attack map. `DataServer` tails a syslog file, parses attack events, geolocates source IPs against MaxMind GeoLite2, and publishes JSON to Redis. `AttackMapServer` subscribes to that Redis channel and fans events over WebSocket to a browser client (`index.html` + `static/map.js`), which renders attack arcs on a MapBox map.
+A real-time GeoIP cyber-attack map. `DataServer` tails a syslog file, parses attack events, geolocates source IPs against MaxMind GeoLite2, and publishes JSON to Redis. `AttackMapServer` subscribes to that Redis channel and fans events over WebSocket to a browser client (`index.html` + `static/map.js` + `static/overlay.js`), which renders attack arcs on a MapBox map under a glass-panel dashboard overlay.
 
 This is a modernized fork of `matthewclarkmay/geoip-attack-map`: upgraded to Tornado 6, `redis.asyncio`, Python 3.12, and Docker Compose deployment.
 
@@ -18,7 +18,8 @@ syslog file  →  DataServer.py  ──publish──►  Redis  ──subscribe�
 - **`DataServer/DataServer.py`** — env-driven config, waits on startup for GeoIP DB and syslog file before processing. Publishes to `attack-map-production` channel. Running stats (`event_count`, `continents_tracked`, etc.) are module-level globals appended to every event; printed on `SIGTERM`.
 - **`DataServer/const.py`** — `META` is the declarative GeoLite2 field-extraction spec used by `clean_db`; `PORTMAP` maps ports → protocol labels. Add protocol mappings here.
 - **`AttackMapServer/AttackMapServer.py`** — Tornado 6. `ClientHub` holds a `redis.asyncio` subscriber task that broadcasts to all connected `WebSocketHandler` instances. `SERVICE_RGB` maps protocol labels to colors; every key that `PORTMAP` can produce must appear here.
-- **`AttackMapServer/static/map.js`** — WebSocket URL built from `window.location` (no hardcoded host). MapBox token and HQ coords injected via Tornado template variables.
+- **`AttackMapServer/static/map.js`** — Leaflet map + D3 v3 arc/particle rendering. Owns the single WebSocket (URL built from `window.location`, reconnects with capped backoff) and re-emits each event as a `window` CustomEvent: `attack` (the parsed message) and `ws-status` (`open`/`closed`). Also mirrors the latest status on `window.wsState`, because overlay.js (stalled behind CDN imports) can miss events dispatched before it loads. MapBox token and HQ coords injected via Tornado template variables.
+- **`AttackMapServer/static/overlay.js`** — dashboard overlay: Preact + htm + signals loaded from esm.sh (no build step). Subscribes to the `attack`/`ws-status` CustomEvents (plus `window.wsState`/`window.SERVICE_RGB` read once at init) — it never touches the socket or the map. Panels: stat chips, live attack feed, top countries/sources, services legend (the full legend comes from `SERVICE_RGB` injected via the template). Stats/rankings sort the full running tallies, so they're throttled to one pass per second. `static/index.css` keeps `#map` at `z-index: 0` and the overlay layer `pointer-events: none` (panels re-enable it) so the map stays draggable.
 - **`DataServer/syslog-gen.py`** — appends synthetic events to `SYSLOG_PATH` directly (no `logger`/syslog dependency).
 
 ## Configuration
