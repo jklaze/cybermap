@@ -19,6 +19,7 @@ Configuration is via environment variables:
 
 import fnmatch
 import io
+import ipaddress
 import json
 import logging
 import os
@@ -48,6 +49,9 @@ PARSERS_PATH = os.environ.get("PARSERS_PATH", "/etc/cybermap/parsers.yml")
 GEOIP_DB_PATH = os.environ.get("GEOIP_DB_PATH", "/geoip/GeoLite2-City.mmdb")
 HQ_IP = os.environ.get("HQ_IP", "8.8.8.8")
 TAIL_POLL_INTERVAL = float(os.environ.get("TAIL_POLL_INTERVAL", "0.1"))
+# Comma-separated source IPs / CIDRs to drop before geolocation (e.g. your own
+# IP so it doesn't flood the map). IPv4 and IPv6 both supported.
+IGNORE_SRC_IPS = os.environ.get("IGNORE_SRC_IPS", "")
 
 REQUIRED_FIELDS = ("src_ip", "dst_ip", "src_port", "dst_port", "type_attack", "cve_attack")
 
@@ -196,6 +200,34 @@ def parse_line(source_path: str, line: str, parsers: list):
         if all(out.get(f) is not None for f in REQUIRED_FIELDS):
             return {f: out[f] for f in REQUIRED_FIELDS}
     return None
+
+
+def parse_ignore_networks(spec: str) -> list:
+    """Compile a comma-separated list of IPs/CIDRs into ip_network objects.
+
+    Invalid entries are logged and skipped rather than aborting startup.
+    """
+    networks = []
+    for token in spec.split(","):
+        token = token.strip()
+        if not token:
+            continue
+        try:
+            networks.append(ipaddress.ip_network(token, strict=False))
+        except ValueError:
+            log.warning("ignoring invalid IGNORE_SRC_IPS entry %r", token)
+    return networks
+
+
+def is_ignored_ip(ip: str, networks: list) -> bool:
+    """True if `ip` falls within any ignored network."""
+    if not networks:
+        return False
+    try:
+        addr = ipaddress.ip_address(ip)
+    except ValueError:
+        return False
+    return any(addr in net for net in networks)
 
 
 def clean_db(unclean: dict) -> dict:
@@ -366,6 +398,10 @@ def main() -> None:
     wait_for_file(PARSERS_PATH, "parser config")
     parsers = load_parsers(PARSERS_PATH)
 
+    ignore_nets = parse_ignore_networks(IGNORE_SRC_IPS)
+    if ignore_nets:
+        log.info("ignoring source IPs in: %s", ", ".join(str(n) for n in ignore_nets))
+
     reader = maxminddb.open_database(GEOIP_DB_PATH)
     hq_dict = find_hq_lat_long(reader, HQ_IP)
 
@@ -375,6 +411,9 @@ def main() -> None:
     for source_path, line in tail_all(SYSLOG_PATHS):
         parsed = parse_line(source_path, line, parsers)
         if not parsed:
+            continue
+
+        if is_ignored_ip(parsed["src_ip"], ignore_nets):
             continue
 
         raw_geo = lookup_ip(reader, parsed["src_ip"])

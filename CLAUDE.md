@@ -33,6 +33,7 @@ All config is via environment variables (no source edits required):
 | `PARSERS_PATH` | `/etc/cybermap/parsers.yml` | DataServer (parser rules YAML) |
 | `GEOIP_DB_PATH` | `/geoip/GeoLite2-City.mmdb` | DataServer |
 | `HQ_IP` | `8.8.8.8` | DataServer (geolocated to compute HQ lat/lng) |
+| `IGNORE_SRC_IPS` | — | DataServer: comma-separated source IPs/CIDRs (IPv4/IPv6) dropped before geolocation |
 | `MAPBOX_TOKEN` | — | AttackMapServer → index.html template |
 | `HQ_LAT` / `HQ_LNG` | `37.3845` / `-122.0881` | AttackMapServer → index.html template |
 | `EVENT_RATE` | `5` | syslog-gen (events per second) |
