@@ -18,6 +18,7 @@ Configuration is via environment variables:
 """
 
 import fnmatch
+import heapq
 import io
 import ipaddress
 import json
@@ -55,6 +56,13 @@ IGNORE_SRC_IPS = os.environ.get("IGNORE_SRC_IPS", "")
 LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO").upper()
 # How often (seconds) to log the pipeline summary even when no events publish.
 STATS_INTERVAL = float(os.environ.get("STATS_INTERVAL", "30"))
+# How often (seconds) to publish the aggregate Stats message. Events themselves
+# never carry the running tallies, so payload size stays O(1).
+STATS_PUBLISH_INTERVAL = float(os.environ.get("STATS_PUBLISH_INTERVAL", "1"))
+# Cap on unique source IPs kept in memory; pruned to the top half when exceeded.
+MAX_TRACKED_IPS = int(os.environ.get("MAX_TRACKED_IPS", "10000"))
+# How many entries each Stats top-N list carries.
+STATS_TOP_N = 10
 
 REQUIRED_FIELDS = ("src_ip", "dst_ip", "src_port", "dst_port", "type_attack", "cve_attack")
 
@@ -383,6 +391,36 @@ def tail_all(paths: list):
         yield q.get()
 
 
+def _rank(counts: dict, codes: dict) -> list:
+    top = heapq.nlargest(STATS_TOP_N, counts.items(), key=lambda kv: kv[1])
+    return [{"label": k, "count": v, "code": codes.get(k)} for k, v in top]
+
+
+def build_stats_message() -> dict:
+    """Compact aggregate snapshot published on a throttle, separate from events."""
+    return {
+        "msg_type": "Stats",
+        "event_count": event_count,
+        "unique_ips": len(ips_tracked),
+        "unique_countries": len(countries_tracked),
+        "top_countries": _rank(countries_tracked, country_to_code),
+        "top_sources": _rank(ips_tracked, ip_to_code),
+        "unknowns": unknowns,
+        "event_time": strftime("%d-%m-%Y %H:%M:%S", localtime()),
+    }
+
+
+def prune_tracked_ips(cap: int) -> None:
+    """Keep memory bounded: when over `cap`, retain only the top cap//2 IPs by count."""
+    global ips_tracked, ip_to_code
+    if len(ips_tracked) <= cap:
+        return
+    keep = heapq.nlargest(cap // 2, ips_tracked.items(), key=lambda kv: kv[1])
+    ips_tracked = dict(keep)
+    ip_to_code = {ip: code for ip, code in ip_to_code.items() if ip in ips_tracked}
+    log.info("pruned ips_tracked to top %d entries (cap %d)", len(ips_tracked), cap)
+
+
 def stats_summary() -> str:
     """One-line pipeline tally: how many lines came in and where they went."""
     return (
@@ -431,6 +469,7 @@ def main() -> None:
     log.info("publishing to channel %s", REDIS_CHANNEL)
 
     last_summary = monotonic()
+    last_stats_pub = 0.0
     for source_path, line in tail_all(SYSLOG_PATHS):
         lines_read += 1
         now = monotonic()
@@ -473,17 +512,17 @@ def main() -> None:
         track_stat(super_dict, ips_tracked, "src_ip")
         track_flag(super_dict, country_to_code, "country", "iso_code")
         track_flag(super_dict, ip_to_code, "src_ip", "iso_code")
+        prune_tracked_ips(MAX_TRACKED_IPS)
 
         super_dict["event_count"] = event_count
-        super_dict["continents_tracked"] = continents_tracked
-        super_dict["countries_tracked"] = countries_tracked
-        super_dict["ips_tracked"] = ips_tracked
-        super_dict["unknowns"] = unknowns
         super_dict["event_time"] = strftime("%d-%m-%Y %H:%M:%S", localtime())
-        super_dict["country_to_code"] = country_to_code
-        super_dict["ip_to_code"] = ip_to_code
 
         r.publish(REDIS_CHANNEL, json.dumps(super_dict))
+
+        # Aggregates travel separately on a throttle so event payloads stay O(1).
+        if now - last_stats_pub >= STATS_PUBLISH_INTERVAL:
+            r.publish(REDIS_CHANNEL, json.dumps(build_stats_message()))
+            last_stats_pub = now
 
         if event_count % 50 == 0:
             log.info("pipeline: %s", stats_summary())

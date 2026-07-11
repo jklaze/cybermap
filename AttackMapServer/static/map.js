@@ -267,6 +267,12 @@ window.wsState = "closed";
                 handleTraffic(msg, srcPoint, hqPoint, srcLatLng);
                 window.dispatchEvent(new CustomEvent("attack", { detail: msg }));
                 break;
+            case "Stats":
+                // Mirrored like wsState so overlay.js (stalled behind CDN
+                // imports) can seed itself from the latest snapshot at init.
+                window.lastStats = msg;
+                window.dispatchEvent(new CustomEvent("stats", { detail: msg }));
+                break;
             }
         } catch (err) {
             console.log(err);

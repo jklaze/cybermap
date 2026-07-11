@@ -10,7 +10,6 @@ const html = htm.bind(h);
 
 const FEED_LIMIT = 50;
 const RANK_LIMIT = 8;
-const TALLY_INTERVAL_MS = 1000;
 
 // map.js mirrors the socket state on window.wsState, so a connection that
 // opened before this module finished loading is still seen here.
@@ -28,49 +27,34 @@ const services = signal(
 
 let eventSeq = 0;
 
-function rank(counts, codes) {
-    const entries = Object.entries(counts || {})
-        .sort((a, b) => b[1] - a[1])
-        .slice(0, RANK_LIMIT);
-    const max = entries.length ? entries[0][1] : 1;
-    return entries.map(([label, count]) => ({
-        label,
-        count,
-        code: (codes || {})[label],
-        share: count / max,
-    }));
+// Rankings arrive pre-sorted from the server's throttled Stats message;
+// the client only clips to RANK_LIMIT and derives the bar widths.
+function rank(rows) {
+    const entries = (rows || []).slice(0, RANK_LIMIT);
+    const max = entries.length ? entries[0].count : 1;
+    return entries.map((row) => ({ ...row, share: row.count / max }));
 }
 
 window.addEventListener("ws-status", (e) => {
     connected.value = e.detail === "open";
 });
 
-// Stats and rankings iterate + sort the full running tallies (one key per
-// unique source IP ever seen), so they are throttled to one pass per
-// TALLY_INTERVAL_MS instead of running on every event.
-let pendingTallies = null;
-let tallyCooldown = null;
-
-function applyTallies(msg) {
+function applyStats(msg) {
     stats.value = {
         events: msg.event_count || 0,
-        ips: Object.keys(msg.ips_tracked || {}).length,
-        countries: Object.keys(msg.countries_tracked || {}).length,
+        ips: msg.unique_ips || 0,
+        countries: msg.unique_countries || 0,
     };
-    countries.value = rank(msg.countries_tracked, msg.country_to_code);
-    sources.value = rank(msg.ips_tracked, msg.ip_to_code);
+    countries.value = rank(msg.top_countries);
+    sources.value = rank(msg.top_sources);
 }
 
-function startTallyCooldown() {
-    tallyCooldown = setTimeout(() => {
-        tallyCooldown = null;
-        if (pendingTallies) {
-            const msg = pendingTallies;
-            pendingTallies = null;
-            applyTallies(msg);
-            startTallyCooldown();
-        }
-    }, TALLY_INTERVAL_MS);
+window.addEventListener("stats", (e) => applyStats(e.detail));
+
+// map.js mirrors the latest Stats snapshot, so a message that arrived before
+// this module finished loading still seeds the panels.
+if (window.lastStats) {
+    applyStats(window.lastStats);
 }
 
 window.addEventListener("attack", (e) => {
@@ -89,13 +73,6 @@ window.addEventListener("attack", (e) => {
         },
         ...feed.value,
     ].slice(0, FEED_LIMIT);
-
-    if (tallyCooldown) {
-        pendingTallies = msg;
-    } else {
-        applyTallies(msg);
-        startTallyCooldown();
-    }
 });
 
 function Flag({ code }) {

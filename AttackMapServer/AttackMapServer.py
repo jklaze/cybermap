@@ -45,12 +45,32 @@ SERVICE_RGB = {
 
 FORWARDED_KEYS = (
     "src_ip", "dst_ip", "src_port", "dst_port",
-    "city", "continent", "continent_code", "country", "iso_code", "postal_code",
-    "event_count", "continents_tracked", "countries_tracked", "ips_tracked",
-    "unknowns", "event_time", "country_to_code", "ip_to_code",
+    "city", "country", "iso_code", "event_time",
 )
 
 log = logging.getLogger("attack-map-server")
+
+
+def shape_message(payload: dict) -> dict:
+    """Shape a Redis payload for the browser.
+
+    Stats messages (throttled aggregates) pass through as-is; Traffic events
+    are trimmed to the per-event keys plus coords and service color.
+    """
+    if payload.get("msg_type") == "Stats":
+        msg = dict(payload)
+        msg["type"] = "Stats"
+        return msg
+
+    msg = {key: payload.get(key) for key in FORWARDED_KEYS}
+    msg["type"] = payload.get("msg_type")
+    msg["protocol"] = payload.get("protocol")
+    msg["src_lat"] = payload.get("latitude")
+    msg["src_long"] = payload.get("longitude")
+    msg["dst_lat"] = payload.get("dst_lat")
+    msg["dst_long"] = payload.get("dst_long")
+    msg["color"] = SERVICE_RGB.get(msg["protocol"], "#000000")
+    return msg
 
 
 class ClientHub:
@@ -96,16 +116,7 @@ class ClientHub:
             log.warning("dropping non-JSON message: %r", raw[:120])
             return
 
-        msg = {key: payload.get(key) for key in FORWARDED_KEYS}
-        msg["type"] = payload.get("msg_type")
-        msg["protocol"] = payload.get("protocol")
-        msg["src_lat"] = payload.get("latitude")
-        msg["src_long"] = payload.get("longitude")
-        msg["dst_lat"] = payload.get("dst_lat")
-        msg["dst_long"] = payload.get("dst_long")
-        msg["color"] = SERVICE_RGB.get(msg["protocol"], "#000000")
-
-        encoded = json.dumps(msg)
+        encoded = json.dumps(shape_message(payload))
         for client in list(self._clients):
             try:
                 client.write_message(encoded)
