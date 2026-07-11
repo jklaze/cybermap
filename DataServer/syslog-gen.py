@@ -22,8 +22,19 @@ from const import PORTMAP
 SYSLOG_PATH = os.environ.get("SYSLOG_PATH", "/var/log/attack-map/syslog")
 EVENT_RATE = float(os.environ.get("EVENT_RATE", "5"))
 HQ_IP = os.environ.get("HQ_IP", "8.8.8.8")
+# Cap the demo file so the shared volume can't grow forever. DataServer's
+# tail() treats the truncation as a rotation and keeps following.
+SYSLOG_MAX_BYTES = int(os.environ.get("SYSLOG_MAX_BYTES", str(10 * 1024 * 1024)))
 
 INTERVAL = 1.0 / EVENT_RATE if EVENT_RATE > 0 else 1.0
+
+
+def maybe_truncate(f, max_bytes: int) -> None:
+    """Truncate the append-mode file in place once it exceeds `max_bytes`."""
+    if f.tell() >= max_bytes:
+        f.truncate(0)
+        f.seek(0)
+        print(f"[syslog-gen] truncated output at {max_bytes} bytes", flush=True)
 
 
 def random_ip() -> str:
@@ -48,6 +59,7 @@ def main() -> None:
             line = f"{ts} attack-map-sample: {random_event()}\n"
             f.write(line)
             f.flush()
+            maybe_truncate(f, SYSLOG_MAX_BYTES)
             sleep(INTERVAL)
 
 

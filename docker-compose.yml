@@ -1,13 +1,28 @@
 name: cybermap
 
+# Cap container stdout/stderr logs — the default json-file driver is unbounded.
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
 
+  # Pure pub/sub broker: nothing is persisted, so snapshots/AOF are disabled
+  # and no data volume is needed.
   redis:
     container_name: cm-redis
     image: redis:7-alpine
+    command: ["redis-server", "--save", "", "--appendonly", "no", "--maxmemory", "64mb"]
     restart: unless-stopped
-    volumes:
-      - redis-data:/data
+    mem_limit: 128m
+    logging: *default-logging
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
     networks:
       - default
 
@@ -25,6 +40,7 @@ services:
       - ./scripts/download-geoip.sh:/download-geoip.sh:ro
     command: sh /download-geoip.sh
     restart: on-failure
+    logging: *default-logging
 
   # Generates synthetic attack events and writes them to the shared syslog volume.
   # Container is always created; set SYSLOG_GEN_ENABLED=false in .env to keep it stopped.
@@ -39,11 +55,14 @@ services:
       SYSLOG_PATH: /var/log/attack-map/syslog
       HQ_IP: ${HQ_IP:-8.8.8.8}
       EVENT_RATE: ${EVENT_RATE:-5}
+      SYSLOG_MAX_BYTES: ${SYSLOG_MAX_BYTES:-10485760}
     volumes:
       - syslog-feed:/var/log/attack-map
     networks:
       - default
     restart: on-failure
+    mem_limit: 128m
+    logging: *default-logging
 
   data-server:
     container_name: cm-data-feed
@@ -59,6 +78,8 @@ services:
       HQ_IP: ${HQ_IP:-8.8.8.8}
       IGNORE_SRC_IPS: ${IGNORE_SRC_IPS:-}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      MAX_TRACKED_IPS: ${MAX_TRACKED_IPS:-10000}
+      STATS_PUBLISH_INTERVAL: ${STATS_PUBLISH_INTERVAL:-1}
     volumes:
       - syslog-feed:/var/log/attack-map
       - geoip-db:/geoip:ro
@@ -72,6 +93,8 @@ services:
     networks:
       - default
     restart: unless-stopped
+    mem_limit: 256m
+    logging: *default-logging
 
   attack-map-server:
     container_name: cm-attack-map
@@ -91,11 +114,17 @@ services:
     networks:
       - default
     restart: unless-stopped
+    mem_limit: 256m
+    logging: *default-logging
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8888/health', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
 
 networks:
   default:
 
 volumes:
-  redis-data:
   geoip-db:
   syslog-feed:
