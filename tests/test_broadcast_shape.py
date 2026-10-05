@@ -61,3 +61,11 @@ def test_shape_stats_message_passes_through():
     assert msg["type"] == "Stats"
     assert msg["event_count"] == 7
     assert msg["top_countries"][0]["label"] == "France"
+
+
+def test_every_service_label_has_a_color():
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "DataServer"))
+    from const import PORTMAP
+
+    labels = set(PORTMAP.values()) | {"SCAN", "OTHER"}
+    assert labels <= set(ams.SERVICE_RGB), labels - set(ams.SERVICE_RGB)

@@ -40,6 +40,12 @@ SERVICE_RGB = {
     "RDP": "#ff0060",
     "DoS": "#ff0000",
     "ICMP": "#ffcccc",
+    "IOT": "#ffbf00",
+    "PROXY": "#a0a0a0",
+    "VOIP": "#ff80c0",
+    # Blocked probe to a port with no service behind it: the bulk of firewall
+    # events, so a muted color keeps real service attacks standing out.
+    "SCAN": "#7a7a99",
     "OTHER": "#6600cc",
 }
 

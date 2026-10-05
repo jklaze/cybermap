@@ -369,19 +369,21 @@ def clean_db(unclean: dict) -> dict:
     return selected
 
 
-def get_tcp_udp_proto(src_port, dst_port) -> str:
+def get_service(dst_port) -> str:
+    """Label an inbound event by the port it targeted.
+
+    The attacker's source port is ephemeral (or deliberately spoofed to 53/80
+    to slip past firewalls), so it says nothing about the service attacked.
+    A real port that isn't a known service is a port-scan probe; OTHER is left
+    for events without a usable port.
+    """
     try:
-        src_port = int(src_port)
         dst_port = int(dst_port)
     except (TypeError, ValueError):
         return "OTHER"
-    # src_port 0 is the "unknown" default of formats that can't capture it
-    # (nginx/caddy/...), not a real port — don't let it map to PORTMAP[0].
-    if src_port and src_port in PORTMAP:
-        return PORTMAP[src_port]
     if dst_port in PORTMAP:
         return PORTMAP[dst_port]
-    return "OTHER"
+    return "SCAN"
 
 
 def lookup_ip(reader, ip: str):
@@ -611,7 +613,7 @@ def main() -> None:
 
         event_count += 1
         flat_geo = clean_db(raw_geo)
-        proto = get_tcp_udp_proto(parsed["src_port"], parsed["dst_port"])
+        proto = get_service(parsed["dst_port"])
 
         super_dict = merge_dicts(
             hq_dict,

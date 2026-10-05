@@ -45,13 +45,16 @@ def test_bundled_parsers_cover_caddy_access_log():
     assert out and out["src_ip"] == "192.53.169.77"
 
 
-def test_unknown_src_port_falls_back_to_dst_port():
-    assert ds.get_tcp_udp_proto("0", "443") == "HTTPS"
-    assert ds.get_tcp_udp_proto("0", "80") == "HTTP"
+def test_service_comes_from_targeted_port():
+    assert ds.get_service("443") == "HTTPS"
+    assert ds.get_service("22") == "SSH"
+    assert ds.get_service("8443") == "HTTPS"
 
 
-def test_real_src_port_still_wins():
-    assert ds.get_tcp_udp_proto("22", "443") == ds.PORTMAP[22]
+def test_unknown_port_is_a_scan_and_missing_port_is_other():
+    assert ds.get_service("47913") == "SCAN"
+    assert ds.get_service("") == "OTHER"
+    assert ds.get_service(None) == "OTHER"
 
 
 def _caddy(status, ua="curl"):
