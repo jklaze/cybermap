@@ -43,3 +43,12 @@ def test_bundled_parsers_cover_caddy_access_log():
     parsers = ds.load_parsers(path)
     out = ds.parse_line("/host-logs/caddy/access.log", CADDY_LINE, parsers)
     assert out and out["src_ip"] == "192.53.169.77"
+
+
+def test_unknown_src_port_falls_back_to_dst_port():
+    assert ds.get_tcp_udp_proto("0", "443") == "HTTPS"
+    assert ds.get_tcp_udp_proto("0", "80") == "HTTP"
+
+
+def test_real_src_port_still_wins():
+    assert ds.get_tcp_udp_proto("22", "443") == ds.PORTMAP[22]

@@ -279,7 +279,9 @@ def get_tcp_udp_proto(src_port, dst_port) -> str:
         dst_port = int(dst_port)
     except (TypeError, ValueError):
         return "OTHER"
-    if src_port in PORTMAP:
+    # src_port 0 is the "unknown" default of formats that can't capture it
+    # (nginx/caddy/...), not a real port — don't let it map to PORTMAP[0].
+    if src_port and src_port in PORTMAP:
         return PORTMAP[src_port]
     if dst_port in PORTMAP:
         return PORTMAP[dst_port]
