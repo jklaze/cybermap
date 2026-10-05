@@ -115,6 +115,8 @@ Works with any number of sources, in any host directories, including rotated log
      format: nginx-access
    ```
 
+   To skip lines you don't want plotted (healthy responses, monitoring bots), add `exclude:` with a regex or a list of regexes to the entry.
+
    If a format mostly works but a field is wrong, override it under `defaults:` (regex-captured fields always win — `defaults` only fills in what the regex doesn't capture). For unsupported log shapes, write a custom `regex:` with named groups — see the comments at the bottom of `parsers.yml`.
 
 4. `docker compose up -d`. Repeat steps 2–3 and `docker compose up -d` again whenever you add a source.
@@ -128,13 +130,16 @@ Works with any number of sources, in any host directories, including rotated log
 `data-server` logs a periodic pipeline tally so you can see where lines go:
 
 ```
-pipeline: read=4213 published=0 parse_miss=4213 ignored=0 geo_miss=0
+pipeline: read=4213 published=0 parse_miss=4213 excluded=0 ignored=0 geo_miss=0
 ```
 
 - **`parse_miss` high, `published=0`** — no parser matched. Almost always a
   `match:` glob that doesn't equal the `SYSLOG_PATHS` entry (e.g. `/host-syslog/...`
   vs `/host-logs/...`). Set `LOG_LEVEL=DEBUG` to see the exact unmatched lines and
   which source they came from.
+- **`excluded` high** — expected: lines dropped on purpose by a parser entry's
+  `exclude:` (e.g. the bundled Caddy entry skips 1xx/2xx/3xx responses and the
+  uptime monitor, so only error responses — scanners/probes — are plotted).
 - **`geo_miss` high** — lines parse, but the source IPs aren't in GeoLite2
   (private/internal ranges). Expected for LAN traffic; only public IPs render.
 - **`read=0`** — nothing is being tailed: the file is quiet, or the mount/path is

@@ -52,3 +52,33 @@ def test_unknown_src_port_falls_back_to_dst_port():
 
 def test_real_src_port_still_wins():
     assert ds.get_tcp_udp_proto("22", "443") == ds.PORTMAP[22]
+
+
+def _caddy(status, ua="curl"):
+    return CADDY_LINE.replace('"status":401', f'"status":{status}').replace('["curl"]', f'["{ua}"]')
+
+
+def test_bundled_caddy_entry_plots_only_error_responses():
+    path = os.path.join(os.path.dirname(__file__), "..", "DataServer", "parsers.yml")
+    parsers = ds.load_parsers(path)
+    src = "/host-logs/caddy/access.log"
+    for status in (200, 204, 301, 308):
+        assert ds.parse_line(src, _caddy(status), parsers) is ds.EXCLUDED
+    for status in (400, 404, 401, 502):
+        assert isinstance(ds.parse_line(src, _caddy(status), parsers), dict)
+
+
+def test_bundled_caddy_entry_skips_uptime_bot():
+    path = os.path.join(os.path.dirname(__file__), "..", "DataServer", "parsers.yml")
+    parsers = ds.load_parsers(path)
+    line = _caddy(401, ua="Better Uptime Bot Mozilla/5.0")
+    assert ds.parse_line("/host-logs/caddy/access.log", line, parsers) is ds.EXCLUDED
+
+
+def test_exclude_does_not_affect_other_sources():
+    p = ds.Parser(name="x", match="/a.log", regex=r"(?P<src_ip>\S+)", defaults={
+        "dst_ip": "0", "src_port": "0", "dst_port": "0", "type_attack": "t", "cve_attack": "c"},
+        exclude=["drop"])
+    assert ds.parse_line("/b.log", "drop me", [p]) is None
+    assert ds.parse_line("/a.log", "drop me", [p]) is ds.EXCLUDED
+    assert ds.parse_line("/a.log", "1.2.3.4 keep", [p])["src_ip"] == "1.2.3.4"

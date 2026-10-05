@@ -139,9 +139,14 @@ BUILTIN_FORMATS = {
 
 log = logging.getLogger("data-server")
 
+# parse_line() result for a line a parser entry's `exclude:` filtered out on
+# purpose (e.g. monitoring bots) — tallied apart from genuine parse misses.
+EXCLUDED = object()
+
 event_count = 0
 lines_read = 0
 parse_misses = 0
+excluded_count = 0
 ignored_count = 0
 geo_misses = 0
 continents_tracked: dict = {}
@@ -153,13 +158,14 @@ unknowns: dict = {}
 
 
 class Parser:
-    __slots__ = ("name", "match", "regex", "defaults")
+    __slots__ = ("name", "match", "regex", "defaults", "exclude")
 
-    def __init__(self, name: str, match: str, regex: str, defaults: dict):
+    def __init__(self, name: str, match: str, regex: str, defaults: dict, exclude=()):
         self.name = name
         self.match = match
         self.regex = re.compile(regex)
         self.defaults = defaults
+        self.exclude = [re.compile(x) for x in exclude]
 
 
 def load_parsers(path: str) -> list:
@@ -168,6 +174,7 @@ def load_parsers(path: str) -> list:
     Each entry must have `match:` plus either `format:` (a built-in name from
     BUILTIN_FORMATS) or `regex:` (a custom pattern with named groups). User
     `defaults:` are merged on top of the built-in defaults when using `format:`.
+    An optional `exclude:` (regex or list of regexes) drops matching lines.
     """
     with open(path) as f:
         data = yaml.safe_load(f) or []
@@ -179,6 +186,9 @@ def load_parsers(path: str) -> list:
         try:
             match = entry["match"]
             user_defaults = entry.get("defaults") or {}
+            exclude = entry.get("exclude") or []
+            if isinstance(exclude, str):
+                exclude = [exclude]
 
             if "format" in entry and "regex" in entry:
                 log.error("parsers.yml entry #%d: use either `format:` or `regex:`, not both", i)
@@ -204,7 +214,7 @@ def load_parsers(path: str) -> list:
                 log.error("parsers.yml entry #%d: must specify `format:` or `regex:`", i)
                 sys.exit(1)
 
-            parsers.append(Parser(name=name, match=match, regex=regex, defaults=defaults))
+            parsers.append(Parser(name=name, match=match, regex=regex, defaults=defaults, exclude=exclude))
         except (KeyError, re.error) as exc:
             log.error("invalid parser entry #%d in %s: %s", i, path, exc)
             sys.exit(1)
@@ -216,9 +226,17 @@ def load_parsers(path: str) -> list:
 
 
 def parse_line(source_path: str, line: str, parsers: list):
-    """Apply parsers in order. First entry that matches the source and produces all six fields wins."""
+    """Apply parsers in order. First entry that matches the source and produces all six fields wins.
+
+    Returns EXCLUDED if an entry for this source skipped the line via `exclude:`
+    and no later entry parsed it.
+    """
+    excluded = False
     for p in parsers:
         if not fnmatch.fnmatch(source_path, p.match):
+            continue
+        if any(x.search(line) for x in p.exclude):
+            excluded = True
             continue
         m = p.regex.search(line)
         if not m:
@@ -227,7 +245,7 @@ def parse_line(source_path: str, line: str, parsers: list):
         out.update({k: v for k, v in m.groupdict().items() if v is not None})
         if all(out.get(f) is not None for f in REQUIRED_FIELDS):
             return {f: out[f] for f in REQUIRED_FIELDS}
-    return None
+    return EXCLUDED if excluded else None
 
 
 def parse_ignore_networks(spec: str) -> list:
@@ -440,7 +458,8 @@ def stats_summary() -> str:
     """One-line pipeline tally: how many lines came in and where they went."""
     return (
         f"read={lines_read} published={event_count} "
-        f"parse_miss={parse_misses} ignored={ignored_count} geo_miss={geo_misses}"
+        f"parse_miss={parse_misses} excluded={excluded_count} "
+        f"ignored={ignored_count} geo_miss={geo_misses}"
     )
 
 
@@ -462,7 +481,7 @@ def install_signal_handlers() -> None:
 
 
 def main() -> None:
-    global event_count, lines_read, parse_misses, ignored_count, geo_misses
+    global event_count, lines_read, parse_misses, excluded_count, ignored_count, geo_misses
     logging.basicConfig(
         level=getattr(logging, LOG_LEVEL, logging.INFO),
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
@@ -493,6 +512,9 @@ def main() -> None:
             last_summary = now
 
         parsed = parse_line(source_path, line, parsers)
+        if parsed is EXCLUDED:
+            excluded_count += 1
+            continue
         if not parsed:
             parse_misses += 1
             log.debug("parse-miss [%s] %s", source_path, line.rstrip()[:200])

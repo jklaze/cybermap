@@ -65,11 +65,11 @@ python3 -m pytest tests/
 
 Host logs are fed in via `docker-compose.override.yml` (gitignored; example in `docker-compose.override.example.yml`): one read-only bind mount of each source's **parent directory** under `/host-logs/<name>`, plus `SYSLOG_PATHS` listing the files. Never bind-mount individual log files (rotation swaps the inode and the mount goes stale) and never gather sources via symlinks (they dangle inside the container). `tail()` in `DataServer/DataServer.py` is rotation-aware: it reopens on inode change or truncation — covered by `tests/test_tail.py`.
 
-Each `parsers.yml` `match:` glob must equal a `SYSLOG_PATHS` entry exactly — a mismatch silently drops every line. The pipeline logs a periodic `pipeline: read=N published=N parse_miss=N ignored=N geo_miss=N` tally (`stats_summary()`); set `LOG_LEVEL=DEBUG` for per-line parse-miss/geo-miss reasons.
+Each `parsers.yml` `match:` glob must equal a `SYSLOG_PATHS` entry exactly — a mismatch silently drops every line. The pipeline logs a periodic `pipeline: read=N published=N parse_miss=N excluded=N ignored=N geo_miss=N` tally (`stats_summary()`); set `LOG_LEVEL=DEBUG` for per-line parse-miss/geo-miss reasons.
 
 ## Customizing the syslog parser
 
-Parsing is declarative via `parsers.yml` (path set by `PARSERS_PATH`). Each entry maps a container-path glob (`match:`) to a built-in `format:` from `BUILTIN_FORMATS` in `DataServer/DataServer.py` (demo-csv, sshd-auth, ufw, nginx-access, apache-access, caddy-json, fail2ban) or a custom `regex:` with named groups. A parse must yield `src_ip`, `dst_ip`, `src_port`, `dst_port`, `type_attack`, `cve_attack` (regex groups merged over `defaults:`), or the line is skipped.
+Parsing is declarative via `parsers.yml` (path set by `PARSERS_PATH`). Each entry maps a container-path glob (`match:`) to a built-in `format:` from `BUILTIN_FORMATS` in `DataServer/DataServer.py` (demo-csv, sshd-auth, ufw, nginx-access, apache-access, caddy-json, fail2ban) or a custom `regex:` with named groups. A parse must yield `src_ip`, `dst_ip`, `src_port`, `dst_port`, `type_attack`, `cve_attack` (regex groups merged over `defaults:`), or the line is skipped. An optional per-entry `exclude:` (regex or list) drops matching lines on purpose; `parse_line` returns the `EXCLUDED` sentinel for those so they tally as `excluded`, not `parse_miss`. The bundled Caddy entry uses it to plot only 4xx/5xx responses and skip the uptime monitor.
 
 ## Dependencies
 

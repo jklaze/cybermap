@@ -39,8 +39,13 @@
 - match: "/host-logs/system/ufw.log"
   format: ufw
 
+# Only plot requests that got an error response (4xx/5xx) — scanners and
+# probes — not ordinary visitors, and skip our own uptime monitor.
 - match: "/host-logs/caddy/access.log"
   format: caddy-json
+  exclude:
+    - '"status":[123]\d\d\b'
+    - 'Better Uptime Bot'
 
 # - match: "/host-logs/nginx/access.log"
 #   format: nginx-access
@@ -61,6 +66,15 @@
 #   format: nginx-access
 #   defaults:
 #     dst_port: "443"
+#
+# --- Drop lines you don't want plotted ---
+#
+# `exclude:` takes a regex (or a list of them); any line matching one is
+# skipped and counted as `excluded` in the pipeline tally, not `parse_miss`.
+#
+# - match: "/host-logs/nginx/access.log"
+#   format: nginx-access
+#   exclude: '" [23]\d\d '     # only 4xx/5xx responses
 #
 # --- Advanced: fully custom regex ---
 #
