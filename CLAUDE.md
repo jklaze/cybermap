@@ -34,7 +34,7 @@ All config is via environment variables (no source edits required):
 | `PARSERS_PATH` | `/etc/cybermap/parsers.yml` | DataServer (parser rules YAML) |
 | `GEOIP_DB_PATH` | `/geoip/GeoLite2-City.mmdb` | DataServer |
 | `HQ_IP` | `8.8.8.8` | DataServer (geolocated to compute HQ lat/lng) |
-| `IGNORE_SRC_IPS` | — | DataServer: comma-separated source IPs/CIDRs (IPv4/IPv6) dropped before geolocation |
+| `IGNORE_SRC_IPS` | — | DataServer: comma-separated source IPs/CIDRs (IPv4/IPv6) dropped before geolocation; `HQ_IP` is always added (`build_ignore_networks`) |
 | `LOG_LEVEL` | `INFO` | DataServer: set `DEBUG` for per-line parse-miss/geo-miss diagnostics |
 | `MAX_TRACKED_IPS` | `10000` | DataServer: cap on unique-IP tally; pruned to top half when exceeded |
 | `STATS_PUBLISH_INTERVAL` | `1` | DataServer: min seconds between `Stats` aggregate publishes |

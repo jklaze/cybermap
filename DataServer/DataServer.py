@@ -51,7 +51,8 @@ GEOIP_DB_PATH = os.environ.get("GEOIP_DB_PATH", "/geoip/GeoLite2-City.mmdb")
 HQ_IP = os.environ.get("HQ_IP", "8.8.8.8")
 TAIL_POLL_INTERVAL = float(os.environ.get("TAIL_POLL_INTERVAL", "0.1"))
 # Comma-separated source IPs / CIDRs to drop before geolocation (e.g. your own
-# IP so it doesn't flood the map). IPv4 and IPv6 both supported.
+# IP so it doesn't flood the map). IPv4 and IPv6 both supported. HQ_IP is
+# always ignored too: traffic from the server itself is never an attack.
 IGNORE_SRC_IPS = os.environ.get("IGNORE_SRC_IPS", "")
 LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO").upper()
 # How often (seconds) to log the pipeline summary even when no events publish.
@@ -262,6 +263,18 @@ def parse_ignore_networks(spec: str) -> list:
             networks.append(ipaddress.ip_network(token, strict=False))
         except ValueError:
             log.warning("ignoring invalid IGNORE_SRC_IPS entry %r", token)
+    return networks
+
+
+def build_ignore_networks(spec: str, hq_ip: str) -> list:
+    """IGNORE_SRC_IPS networks plus HQ_IP (the server's own address)."""
+    networks = parse_ignore_networks(spec)
+    try:
+        hq_net = ipaddress.ip_network(hq_ip.strip(), strict=False)
+    except ValueError:
+        return networks
+    if not any(hq_net.subnet_of(n) for n in networks if n.version == hq_net.version):
+        networks.append(hq_net)
     return networks
 
 
@@ -492,7 +505,7 @@ def main() -> None:
     wait_for_file(PARSERS_PATH, "parser config")
     parsers = load_parsers(PARSERS_PATH)
 
-    ignore_nets = parse_ignore_networks(IGNORE_SRC_IPS)
+    ignore_nets = build_ignore_networks(IGNORE_SRC_IPS, HQ_IP)
     if ignore_nets:
         log.info("ignoring source IPs in: %s", ", ".join(str(n) for n in ignore_nets))
 

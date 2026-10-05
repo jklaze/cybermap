@@ -49,7 +49,7 @@ All settings live in `.env` (copy from `.env.example`):
 | `HQ_IP` | No | `8.8.8.8` | Source IP used to compute HQ lat/lng (arc destination) |
 | `HQ_LAT` / `HQ_LNG` | No | `37.3845` / `-122.0881` | Override HQ map marker position directly |
 | `EVENT_RATE` | No | `5` | Demo events per second |
-| `IGNORE_SRC_IPS` | No | — | Comma-separated source IPs/CIDRs (IPv4/IPv6) to drop before geolocation — e.g. your own IP so it doesn't flood the map |
+| `IGNORE_SRC_IPS` | No | — | Comma-separated source IPs/CIDRs (IPv4/IPv6) to drop before geolocation — e.g. your own IP so it doesn't flood the map. `HQ_IP` is always ignored as well (add the server's IPv6 here if it has one) |
 | `LOG_LEVEL` | No | `INFO` | `data-server` log verbosity; set `DEBUG` for per-line parse-miss/geo-miss diagnostics |
 | `ATTACK_MAP_PORT` | No | `8888` | Host port for the UI |
 | `GEOIP_MAX_AGE_DAYS` | No | `14` | Days before refreshing the GeoIP DB |

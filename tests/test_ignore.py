@@ -1,4 +1,4 @@
-"""Tests for the source-IP ignore list (IGNORE_SRC_IPS)."""
+"""Tests for the source-IP ignore list (IGNORE_SRC_IPS + HQ_IP)."""
 
 import os
 import sys
@@ -39,3 +39,25 @@ def test_ipv6_cidr():
     nets = ds.parse_ignore_networks("2001:db8::/32")
     assert ds.is_ignored_ip("2001:db8::1", nets)
     assert not ds.is_ignored_ip("2001:dead::1", nets)
+
+
+def test_hq_ip_is_always_ignored():
+    nets = ds.build_ignore_networks("", "198.51.100.25")
+    assert ds.is_ignored_ip("198.51.100.25", nets)
+    assert not ds.is_ignored_ip("198.51.100.26", nets)
+
+
+def test_hq_ip_added_alongside_ignore_list():
+    nets = ds.build_ignore_networks("203.0.113.7", "198.51.100.25")
+    assert ds.is_ignored_ip("203.0.113.7", nets)
+    assert ds.is_ignored_ip("198.51.100.25", nets)
+
+
+def test_hq_ip_not_duplicated_when_already_covered():
+    nets = ds.build_ignore_networks("198.51.100.0/24", "198.51.100.25")
+    assert [str(n) for n in nets] == ["198.51.100.0/24"]
+
+
+def test_invalid_hq_ip_is_skipped():
+    nets = ds.build_ignore_networks("203.0.113.7", "not-an-ip")
+    assert [str(n) for n in nets] == ["203.0.113.7/32"]
