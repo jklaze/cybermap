@@ -16,6 +16,8 @@ const RANK_LIMIT = 8;
 const connected = signal(window.wsState === "open");
 const stats = signal({ events: 0, ips: 0, countries: 0 });
 const feed = signal([]);
+const scans = signal({ recent: [], count: 0, ips: new Set() });
+const scansOpen = signal(false);
 const countries = signal([]);
 const sources = signal([]);
 
@@ -57,15 +59,15 @@ if (window.lastStats) {
     applyStats(window.lastStats);
 }
 
-// Port-scan probes are most of the traffic and would bury real attacks, so a
-// run of consecutive SCAN events shares one feed row that updates in place
-// (latest time/flag, scan and distinct-IP counts). Any other event starts a
-// new row on top, which closes the run. The map still draws every scan.
-const GROUPED_PROTOCOL = "SCAN";
+// Port-scan probes are most of the traffic and would bury real attacks, so
+// they skip the feed and roll up into a one-line, expandable scans bar at the
+// top of the panel. The map still draws every scan.
+const SCAN_PROTOCOL = "SCAN";
 
 window.addEventListener("attack", (e) => {
     const msg = e.detail;
     const row = {
+        key: ++eventSeq,
         time: (msg.event_time || "").split(" ")[1] || msg.event_time,
         ip: msg.src_ip,
         code: msg.iso_code,
@@ -74,16 +76,14 @@ window.addEventListener("attack", (e) => {
         protocol: msg.protocol || "OTHER",
         color: msg.color || "#888888",
     };
-    const [head, ...rest] = feed.value;
 
-    if (row.protocol === GROUPED_PROTOCOL && head && head.protocol === GROUPED_PROTOCOL) {
-        head.ips.add(row.ip);
-        feed.value = [{ ...head, ...row, count: head.count + 1 }, ...rest];
+    if (row.protocol === SCAN_PROTOCOL) {
+        const { recent, count, ips } = scans.value;
+        ips.add(row.ip);
+        scans.value = { recent: [row, ...recent].slice(0, FEED_LIMIT), count: count + 1, ips };
         return;
     }
-
-    const grouped = row.protocol === GROUPED_PROTOCOL ? { count: 1, ips: new Set([row.ip]) } : {};
-    feed.value = [{ key: ++eventSeq, ...row, ...grouped }, ...feed.value].slice(0, FEED_LIMIT);
+    feed.value = [row, ...feed.value].slice(0, FEED_LIMIT);
 });
 
 function Flag({ code }) {
@@ -126,24 +126,50 @@ function StatsBar() {
     </header>`;
 }
 
+function FeedRow({ row }) {
+    return html`<li class="feed-row">
+        <span class="feed-time">${row.time}</span>
+        <${Flag} code=${row.code} />
+        <span class="feed-ip" title="${row.city ? row.city + ", " : ""}${row.country || ""}">${row.ip}</span>
+        <span class="tag" style=${tagStyle(row.color)}>${row.protocol}</span>
+    </li>`;
+}
+
+function ScanBar() {
+    const { recent, count, ips } = scans.value;
+    const latest = recent[0];
+    const open = scansOpen.value && count > 0;
+    const color = (window.SERVICE_RGB || {})[SCAN_PROTOCOL] || "#888888";
+    return html`<div class="scans ${open ? "open" : ""}">
+        <button
+            class="scan-bar"
+            type="button"
+            disabled=${count === 0}
+            aria-expanded=${open}
+            onClick=${() => (scansOpen.value = !scansOpen.value)}
+        >
+            <span class="scan-chevron">${open ? "▾" : "▸"}</span>
+            <span class="tag" style=${tagStyle(color)}>${SCAN_PROTOCOL}</span>
+            <span class="scan-summary">
+                ${count === 0
+                    ? "no port scans yet"
+                    : `${count.toLocaleString()} probes · ${ips.size.toLocaleString()} ${ips.size === 1 ? "ip" : "ips"}`}
+            </span>
+            ${latest && html`<span class="feed-time">${latest.time}</span>`}
+        </button>
+        ${open &&
+        html`<ul class="feed-list scan-list">
+            ${recent.map((row) => html`<${FeedRow} key=${row.key} row=${row} />`)}
+        </ul>`}
+    </div>`;
+}
+
 function LiveFeed() {
     return html`<section class="panel feed">
         <h2 class="panel-title">live attacks</h2>
+        <${ScanBar} />
         <ul class="feed-list">
-            ${feed.value.map((row) => {
-                const place = `${row.city ? row.city + ", " : ""}${row.country || ""}`;
-                const group = row.count > 1;
-                return html`<li class="feed-row" key=${row.key}>
-                    <span class="feed-time">${row.time}</span>
-                    <${Flag} code=${row.code} />
-                    ${group
-                        ? html`<span class="feed-ip feed-group" title="latest: ${row.ip}${place ? " (" + place + ")" : ""}">
-                              ${row.count.toLocaleString()} scans · ${row.ips.size.toLocaleString()} ${row.ips.size === 1 ? "ip" : "ips"}
-                          </span>`
-                        : html`<span class="feed-ip" title=${place}>${row.ip}</span>`}
-                    <span class="tag" style=${tagStyle(row.color)}>${row.protocol}${group ? ` ×${row.count}` : ""}</span>
-                </li>`;
-            })}
+            ${feed.value.map((row) => html`<${FeedRow} key=${row.key} row=${row} />`)}
             ${feed.value.length === 0 &&
             html`<li class="feed-empty">waiting for events…</li>`}
         </ul>
