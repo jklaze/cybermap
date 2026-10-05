@@ -80,6 +80,7 @@ services:
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       MAX_TRACKED_IPS: ${MAX_TRACKED_IPS:-10000}
       STATS_PUBLISH_INTERVAL: ${STATS_PUBLISH_INTERVAL:-1}
+      RECENT_EVENTS: ${RECENT_EVENTS:-10}
     volumes:
       - syslog-feed:/var/log/attack-map
       - geoip-db:/geoip:ro

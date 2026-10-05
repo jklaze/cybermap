@@ -24,25 +24,30 @@ MAPBOX_TOKEN = os.environ.get("MAPBOX_TOKEN", "")
 HQ_LAT = float(os.environ.get("HQ_LAT", "37.3845"))
 HQ_LNG = float(os.environ.get("HQ_LNG", "-122.0881"))
 
+# The most frequent labels get distinct hue families tuned for the dark map
+# (OKLCH L 0.48-0.67, >=3:1 on the panel background): SSH/HTTPS/TELNET use the
+# trio that stays apart for every pair incl. color-vision deficiency; the rest
+# take the remaining hues by frequency. Labels always print their name too, so
+# color is never the only cue.
 SERVICE_RGB = {
     "FTP": "#ff0000",
-    "SSH": "#ff8000",
-    "TELNET": "#ffff00",
-    "EMAIL": "#80ff00",
+    "SSH": "#d95926",
+    "TELNET": "#199e70",
+    "EMAIL": "#e0619a",
     "WHOIS": "#00ff00",
     "DNS": "#00ff80",
-    "HTTP": "#00ffff",
-    "HTTPS": "#0080ff",
-    "SQL": "#0000ff",
+    "HTTP": "#9085e9",
+    "HTTPS": "#3987e5",
+    "SQL": "#c98500",
     "SNMP": "#8000ff",
     "SMB": "#bf00ff",
     "AUTH": "#ff00ff",
-    "RDP": "#ff0060",
+    "RDP": "#008300",
     "DoS": "#ff0000",
     "ICMP": "#ffcccc",
-    "IOT": "#ffbf00",
+    "IOT": "#b05cd6",
     "PROXY": "#a0a0a0",
-    "VOIP": "#ff80c0",
+    "VOIP": "#0e9cc0",
     # Blocked probe to a port with no service behind it: the bulk of firewall
     # events, so a muted color keeps real service attacks standing out.
     "SCAN": "#7a7a99",
@@ -92,6 +97,42 @@ class ClientHub:
 
     def add(self, client: "WebSocketHandler") -> None:
         self._clients.add(client)
+
+    async def welcome(self, client: "WebSocketHandler") -> None:
+        """Send a new client the recent backlog, then subscribe it to live events.
+
+        data-server keeps the last few attacks/scans and the latest Stats in
+        Redis, so the page is populated on load instead of empty until the
+        next event. Replayed events carry `replay: true` so the map can skip
+        drawing a burst of stale arcs. The client joins the live set only
+        after the backlog is written, so a live event can't land under older
+        replayed ones.
+        """
+        try:
+            r = redis.from_url(self._redis_url, decode_responses=True)
+            async with r.pipeline(transaction=False) as pipe:
+                pipe.lrange(f"{self._channel}:recent-scans", 0, -1)
+                pipe.lrange(f"{self._channel}:recent", 0, -1)
+                pipe.get(f"{self._channel}:stats")
+                scans, attacks, stats = await pipe.execute()
+            await r.aclose()
+        except Exception:
+            log.exception("could not load backlog; sending live events only")
+            scans, attacks, stats = [], [], None
+
+        # lists are newest-first; the client prepends, so send oldest-first
+        for raw in [*reversed(scans), *reversed(attacks), *([stats] if stats else [])]:
+            try:
+                msg = shape_message(json.loads(raw))
+            except json.JSONDecodeError:
+                continue
+            if msg.get("type") == "Traffic":
+                msg["replay"] = True
+            try:
+                client.write_message(json.dumps(msg))
+            except tornado.websocket.WebSocketClosedError:
+                return
+        self.add(client)
 
     def remove(self, client: "WebSocketHandler") -> None:
         self._clients.discard(client)
@@ -156,7 +197,7 @@ class WebSocketHandler(tornado.websocket.WebSocketHandler):
 
     def open(self) -> None:
         log.info("websocket opened: %s", self.request.remote_ip)
-        self.hub.add(self)
+        asyncio.ensure_future(self.hub.welcome(self))
 
     def on_close(self) -> None:
         log.info("websocket closed: %s", self.request.remote_ip)

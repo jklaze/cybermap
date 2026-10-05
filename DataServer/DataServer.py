@@ -62,6 +62,12 @@ STATS_INTERVAL = float(os.environ.get("STATS_INTERVAL", "30"))
 STATS_PUBLISH_INTERVAL = float(os.environ.get("STATS_PUBLISH_INTERVAL", "1"))
 # Cap on unique source IPs kept in memory; pruned to the top half when exceeded.
 MAX_TRACKED_IPS = int(os.environ.get("MAX_TRACKED_IPS", "10000"))
+# How many recent attacks (and, separately, port scans) to keep in Redis so a
+# freshly opened map is populated immediately instead of waiting for traffic.
+RECENT_EVENTS = int(os.environ.get("RECENT_EVENTS", "10"))
+RECENT_KEY = f"{REDIS_CHANNEL}:recent"
+RECENT_SCANS_KEY = f"{REDIS_CHANNEL}:recent-scans"
+STATS_KEY = f"{REDIS_CHANNEL}:stats"
 # How many entries each Stats top-N list carries.
 STATS_TOP_N = 10
 
@@ -658,6 +664,15 @@ def prune_tracked_ips(cap: int) -> None:
     log.info("pruned ips_tracked to top %d entries (cap %d)", len(ips_tracked), cap)
 
 
+def remember_recent(r, encoded: str, scan: bool) -> None:
+    """Keep the newest RECENT_EVENTS attacks / scans for the map's initial load."""
+    key = RECENT_SCANS_KEY if scan else RECENT_KEY
+    pipe = r.pipeline(transaction=False)
+    pipe.lpush(key, encoded)
+    pipe.ltrim(key, 0, RECENT_EVENTS - 1)
+    pipe.execute()
+
+
 def stats_summary() -> str:
     """One-line pipeline tally: how many lines came in and where they went."""
     return (
@@ -764,11 +779,15 @@ def main() -> None:
         super_dict["event_count"] = event_count
         super_dict["event_time"] = strftime("%d-%m-%Y %H:%M:%S", localtime())
 
-        r.publish(REDIS_CHANNEL, json.dumps(super_dict))
+        encoded = json.dumps(super_dict)
+        r.publish(REDIS_CHANNEL, encoded)
+        remember_recent(r, encoded, scan=proto == "SCAN")
 
         # Aggregates travel separately on a throttle so event payloads stay O(1).
         if now - last_stats_pub >= STATS_PUBLISH_INTERVAL:
-            r.publish(REDIS_CHANNEL, json.dumps(build_stats_message()))
+            stats_msg = json.dumps(build_stats_message())
+            r.publish(REDIS_CHANNEL, stats_msg)
+            r.set(STATS_KEY, stats_msg)
             last_stats_pub = now
 
         if event_count % 50 == 0:

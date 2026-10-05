@@ -259,6 +259,12 @@ window.wsState = "closed";
             var msg = JSON.parse(e.data);
             switch (msg.type) {
             case "Traffic":
+                // Backlog sent on connect: fill the panels, but don't fire a
+                // burst of stale arcs at once.
+                if (msg.replay) {
+                    window.dispatchEvent(new CustomEvent("attack", { detail: msg }));
+                    break;
+                }
                 var srcLatLng = new L.LatLng(msg.src_lat, msg.src_long);
                 var hqPoint = map.latLngToLayerPoint(hqLatLng);
                 var srcPoint = map.latLngToLayerPoint(srcLatLng);
