@@ -209,6 +209,12 @@ body {
     white-space: nowrap;
 }
 
+/* collapsed run of port-scan probes (see overlay.js) */
+.feed-group {
+    color: var(--text-muted);
+    font-variant-numeric: tabular-nums;
+}
+
 .feed-empty {
     padding: 10px 14px;
     font-size: 11px;
