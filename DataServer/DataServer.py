@@ -112,6 +112,19 @@ BUILTIN_FORMATS = {
             "cve_attack": "N/A",
         },
     },
+    # Caddy v2 JSON access log (`log { output file ... }`, default encoder).
+    # Caddy's zap encoder emits request keys in a fixed order (remote_ip,
+    # remote_port, client_ip, proto, method). client_ip is the real client
+    # even behind trusted proxies. Most traffic is TLS, so dst_port is 443.
+    "caddy-json": {
+        "regex": r'"msg":"handled request".*?"client_ip":"(?P<src_ip>[^"]+)".*?"method":"(?P<type_attack>[^"]+)"',
+        "defaults": {
+            "dst_ip": "0.0.0.0",
+            "src_port": "0",
+            "dst_port": "443",
+            "cve_attack": "N/A",
+        },
+    },
     # fail2ban "Ban <ip>" action lines.
     "fail2ban": {
         "regex": r"fail2ban\.actions.*\[(?P<type_attack>[^\]]+)\] Ban (?P<src_ip>\S+)",

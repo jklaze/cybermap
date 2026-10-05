@@ -69,7 +69,7 @@ Each `parsers.yml` `match:` glob must equal a `SYSLOG_PATHS` entry exactly — a
 
 ## Customizing the syslog parser
 
-Parsing is declarative via `parsers.yml` (path set by `PARSERS_PATH`). Each entry maps a container-path glob (`match:`) to a built-in `format:` from `BUILTIN_FORMATS` in `DataServer/DataServer.py` (demo-csv, sshd-auth, ufw, nginx-access, apache-access, fail2ban) or a custom `regex:` with named groups. A parse must yield `src_ip`, `dst_ip`, `src_port`, `dst_port`, `type_attack`, `cve_attack` (regex groups merged over `defaults:`), or the line is skipped.
+Parsing is declarative via `parsers.yml` (path set by `PARSERS_PATH`). Each entry maps a container-path glob (`match:`) to a built-in `format:` from `BUILTIN_FORMATS` in `DataServer/DataServer.py` (demo-csv, sshd-auth, ufw, nginx-access, apache-access, caddy-json, fail2ban) or a custom `regex:` with named groups. A parse must yield `src_ip`, `dst_ip`, `src_port`, `dst_port`, `type_attack`, `cve_attack` (regex groups merged over `defaults:`), or the line is skipped.
 
 ## Dependencies
 

@@ -102,6 +102,7 @@ Works with any number of sources, in any host directories, including rotated log
    | `ufw` | UFW firewall BLOCK lines (TCP/UDP) |
    | `nginx-access` | nginx combined access log |
    | `apache-access` | Apache combined access log |
+   | `caddy-json` | Caddy v2 JSON access log (uses `client_ip`) |
    | `fail2ban` | fail2ban "Ban &lt;ip&gt;" actions |
    | `demo-csv` | The bundled synthetic generator |
 
