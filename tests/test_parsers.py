@@ -82,3 +82,69 @@ def test_exclude_does_not_affect_other_sources():
     assert ds.parse_line("/b.log", "drop me", [p]) is None
     assert ds.parse_line("/a.log", "drop me", [p]) is ds.EXCLUDED
     assert ds.parse_line("/a.log", "1.2.3.4 keep", [p])["src_ip"] == "1.2.3.4"
+
+
+AUTH = "/host-logs/system/auth.log"
+SSH_PREFIX = "Oct  5 21:00:00 vps sshd[4242]: "
+
+
+def _bundled():
+    path = os.path.join(os.path.dirname(__file__), "..", "DataServer", "parsers.yml")
+    return ds.load_parsers(path)
+
+
+def _types(lines):
+    parsers, recent = _bundled(), ds.RecentConnections()
+    out = []
+    for msg in lines:
+        r = ds.parse_line(AUTH, SSH_PREFIX + msg + "\n", parsers, recent)
+        out.append(r["type_attack"] if isinstance(r, dict) else r)
+    return out
+
+
+def test_ssh_password_attempts_each_count_and_close_is_not_double_counted():
+    assert _types([
+        "Invalid user admin from 203.0.113.9 port 50000",
+        "Failed password for invalid user admin from 203.0.113.9 port 50000 ssh2",
+        "Failed password for invalid user admin from 203.0.113.9 port 50000 ssh2",
+        "Connection closed by invalid user admin 203.0.113.9 port 50000 [preauth]",
+    ]) == [None, "ssh-bruteforce", "ssh-bruteforce", ds.EXCLUDED]
+
+
+def test_ssh_failure_without_password_counts_once():
+    assert _types([
+        "Connection closed by authenticating user root 203.0.113.9 port 50001 [preauth]",
+        "Disconnected from invalid user  203.0.113.9 port 50002 [preauth]",
+    ]) == ["ssh-login-fail", "ssh-login-fail"]
+
+
+def test_ssh_scanners_count_once_per_connection():
+    assert _types([
+        "Unable to negotiate with 203.0.113.9 port 50003: no matching key exchange method found.",
+        "Connection closed by 203.0.113.9 port 50003 [preauth]",
+        "banner exchange: Connection from 203.0.113.9 port 50004: invalid format",
+        "Connection reset by 203.0.113.9 port 50005",
+    ]) == ["ssh-scan", ds.EXCLUDED, "ssh-scan", "ssh-scan"]
+
+
+def test_ssh_variants_still_parse():
+    assert _types([
+        "message repeated 4 times: [ Failed password for root from 203.0.113.9 port 50006 ssh2]",
+        "Failed password for invalid user  from 203.0.113.9 port 50007 ssh2",
+    ]) == ["ssh-bruteforce", "ssh-bruteforce"]
+    line = "Oct  5 21:00:00 vps sshd-session[7]: Failed password for root from 203.0.113.9 port 50008 ssh2\n"
+    assert ds.parse_line(AUTH, line, _bundled())["src_ip"] == "203.0.113.9"
+
+
+def test_successful_session_close_is_not_an_attack():
+    assert _types([
+        "Accepted publickey for jklaze from 203.0.113.9 port 50009 ssh2: ED25519 SHA256:x",
+        "Disconnected from user jklaze 203.0.113.9 port 50009",
+    ]) == [None, None]
+
+
+def test_recent_connections_is_bounded():
+    r = ds.RecentConnections(cap=2)
+    for k in ("a", "b", "c"):
+        r.add(k)
+    assert not r.seen("a") and r.seen("b") and r.seen("c")

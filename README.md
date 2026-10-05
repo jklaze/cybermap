@@ -99,6 +99,8 @@ Works with any number of sources, in any host directories, including rotated log
    | `format:` | Matches |
    |-----------|---------|
    | `sshd-auth` | Linux sshd "Failed password" lines (`/var/log/auth.log`, `/var/log/secure`) |
+   | `sshd-auth-end` | sshd logins that failed without a password (key-only, invalid user); once per connection |
+   | `sshd-scan` | sshd connections dropped before auth (scanners, bad banners, old key exchange); once per connection |
    | `ufw` | UFW firewall BLOCK lines (TCP/UDP) |
    | `nginx-access` | nginx combined access log |
    | `apache-access` | Apache combined access log |

@@ -77,15 +77,43 @@ BUILTIN_FORMATS = {
         "defaults": {},
     },
     # Linux sshd "Failed password" lines (Debian /var/log/auth.log,
-    # RHEL /var/log/secure). Optional "invalid user" prefix handled.
+    # RHEL /var/log/secure). Optional "invalid user" prefix handled, as are
+    # OpenSSH 9.8+ "sshd-session" and syslog "message repeated N times".
+    # One event per password attempt.
     "sshd-auth": {
-        "regex": r"sshd\[\d+\]:\s+Failed password for (?:invalid user )?\S+ from (?P<src_ip>\S+) port (?P<src_port>\d+)",
+        "regex": r"sshd(?:-session)?\[\d+\]:\s+(?:message repeated \d+ times: \[ )?Failed password for (?:invalid user )?\S* from (?P<src_ip>\S+) port (?P<src_port>\d+)",
         "defaults": {
             "dst_ip": "0.0.0.0",
             "dst_port": "22",
             "type_attack": "ssh-bruteforce",
             "cve_attack": "N/A",
         },
+    },
+    # End of an sshd connection that reached the username stage but never
+    # logged in (key-only attempts, invalid users who never sent a password).
+    # once_per_connection: skipped when the connection already produced an
+    # event (e.g. its "Failed password" lines), so nothing is double counted.
+    "sshd-auth-end": {
+        "regex": r"sshd(?:-session)?\[\d+\]:\s+(?:Connection closed by|Disconnected from|Connection reset by) (?:authenticating|invalid) user \S* ?(?P<src_ip>[0-9a-fA-F.:]+) port (?P<src_port>\d+) \[preauth\]",
+        "defaults": {
+            "dst_ip": "0.0.0.0",
+            "dst_port": "22",
+            "type_attack": "ssh-login-fail",
+            "cve_attack": "N/A",
+        },
+        "once_per_connection": True,
+    },
+    # sshd connections dropped before authentication: port scanners, banner
+    # grabbers, clients offering obsolete key exchange. Once per connection.
+    "sshd-scan": {
+        "regex": r"sshd(?:-session)?\[\d+\]:\s+(?:Connection (?:closed|reset) by|Unable to negotiate with|banner exchange: Connection from) (?P<src_ip>[0-9a-fA-F.:]+) port (?P<src_port>\d+)",
+        "defaults": {
+            "dst_ip": "0.0.0.0",
+            "dst_port": "22",
+            "type_attack": "ssh-scan",
+            "cve_attack": "N/A",
+        },
+        "once_per_connection": True,
     },
     # UFW firewall BLOCK lines (TCP/UDP). ICMP-only blocks lack SPT/DPT
     # and will not match — that's intentional.
@@ -159,14 +187,38 @@ unknowns: dict = {}
 
 
 class Parser:
-    __slots__ = ("name", "match", "regex", "defaults", "exclude")
+    __slots__ = ("name", "match", "regex", "defaults", "exclude", "once_per_connection")
 
-    def __init__(self, name: str, match: str, regex: str, defaults: dict, exclude=()):
+    def __init__(self, name: str, match: str, regex: str, defaults: dict, exclude=(),
+                 once_per_connection: bool = False):
         self.name = name
         self.match = match
         self.regex = re.compile(regex)
         self.defaults = defaults
         self.exclude = [re.compile(x) for x in exclude]
+        self.once_per_connection = once_per_connection
+
+
+class RecentConnections:
+    """Bounded memory of (source, src_ip, src_port) keys that already produced an event.
+
+    A client's source port identifies one TCP connection, so this lets a
+    `once_per_connection` parser skip lines describing a connection that was
+    already reported. Oldest entries are evicted beyond `cap`.
+    """
+
+    def __init__(self, cap: int = 10_000):
+        self.cap = cap
+        self._keys: dict = {}
+
+    def seen(self, key) -> bool:
+        return key in self._keys
+
+    def add(self, key) -> None:
+        self._keys.pop(key, None)
+        self._keys[key] = None
+        if len(self._keys) > self.cap:
+            del self._keys[next(iter(self._keys))]
 
 
 def load_parsers(path: str) -> list:
@@ -176,6 +228,8 @@ def load_parsers(path: str) -> list:
     BUILTIN_FORMATS) or `regex:` (a custom pattern with named groups). User
     `defaults:` are merged on top of the built-in defaults when using `format:`.
     An optional `exclude:` (regex or list of regexes) drops matching lines.
+    `once_per_connection:` (bool, built-in default per format) skips lines whose
+    (src_ip, src_port) already produced an event.
     """
     with open(path) as f:
         data = yaml.safe_load(f) or []
@@ -206,16 +260,19 @@ def load_parsers(path: str) -> list:
                     sys.exit(1)
                 regex = fmt["regex"]
                 defaults = {**fmt["defaults"], **user_defaults}
+                once = entry.get("once_per_connection", fmt.get("once_per_connection", False))
                 name = entry.get("name", fmt_name)
             elif "regex" in entry:
                 regex = entry["regex"]
                 defaults = user_defaults
+                once = entry.get("once_per_connection", False)
                 name = entry.get("name", f"parser-{i}")
             else:
                 log.error("parsers.yml entry #%d: must specify `format:` or `regex:`", i)
                 sys.exit(1)
 
-            parsers.append(Parser(name=name, match=match, regex=regex, defaults=defaults, exclude=exclude))
+            parsers.append(Parser(name=name, match=match, regex=regex, defaults=defaults,
+                                  exclude=exclude, once_per_connection=bool(once)))
         except (KeyError, re.error) as exc:
             log.error("invalid parser entry #%d in %s: %s", i, path, exc)
             sys.exit(1)
@@ -226,11 +283,13 @@ def load_parsers(path: str) -> list:
     return parsers
 
 
-def parse_line(source_path: str, line: str, parsers: list):
+def parse_line(source_path: str, line: str, parsers: list, recent=None):
     """Apply parsers in order. First entry that matches the source and produces all six fields wins.
 
     Returns EXCLUDED if an entry for this source skipped the line via `exclude:`
-    and no later entry parsed it.
+    (or, given a RecentConnections `recent`, via `once_per_connection` for an
+    already-reported connection) and no later entry parsed it. Every
+    successful parse with a real src_port is recorded in `recent`.
     """
     excluded = False
     for p in parsers:
@@ -245,6 +304,12 @@ def parse_line(source_path: str, line: str, parsers: list):
         out = dict(p.defaults)
         out.update({k: v for k, v in m.groupdict().items() if v is not None})
         if all(out.get(f) is not None for f in REQUIRED_FIELDS):
+            key = (source_path, out["src_ip"], out["src_port"])
+            if recent is not None and out["src_port"] != "0":
+                if p.once_per_connection and recent.seen(key):
+                    excluded = True
+                    continue
+                recent.add(key)
             return {f: out[f] for f in REQUIRED_FIELDS}
     return EXCLUDED if excluded else None
 
@@ -509,6 +574,7 @@ def main() -> None:
     if ignore_nets:
         log.info("ignoring source IPs in: %s", ", ".join(str(n) for n in ignore_nets))
 
+    recent = RecentConnections()
     reader = maxminddb.open_database(GEOIP_DB_PATH)
     hq_dict = find_hq_lat_long(reader, HQ_IP)
 
@@ -524,7 +590,7 @@ def main() -> None:
             log.info("pipeline: %s", stats_summary())
             last_summary = now
 
-        parsed = parse_line(source_path, line, parsers)
+        parsed = parse_line(source_path, line, parsers, recent)
         if parsed is EXCLUDED:
             excluded_count += 1
             continue

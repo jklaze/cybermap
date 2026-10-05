@@ -7,6 +7,10 @@
 # Built-in formats:
 #   demo-csv        — the synthetic generator that ships with this repo
 #   sshd-auth       — Linux sshd "Failed password" lines (auth.log / secure)
+#   sshd-auth-end   — sshd logins that failed without a password (key-only,
+#                     invalid user); once per connection
+#   sshd-scan       — sshd connections dropped before auth (scanners);
+#                     once per connection
 #   ufw             — UFW firewall BLOCK lines (TCP/UDP)
 #   nginx-access    — nginx combined access log
 #   apache-access   — Apache combined access log
@@ -33,8 +37,16 @@
 
 # --- Real logs: uncomment + adjust the path to match your SYSLOG_PATHS ---
 #
+# sshd: every failed password attempt, plus one event for each connection
+# that failed or was dropped some other way (no double counting).
 - match: "/host-logs/system/auth.log"
   format: sshd-auth
+
+- match: "/host-logs/system/auth.log"
+  format: sshd-auth-end
+
+- match: "/host-logs/system/auth.log"
+  format: sshd-scan
 
 - match: "/host-logs/system/ufw.log"
   format: ufw
