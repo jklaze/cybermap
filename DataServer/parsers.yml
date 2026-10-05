@@ -88,6 +88,21 @@
 #   format: nginx-access
 #   exclude: '" [23]\d\d '     # only 4xx/5xx responses
 #
+# --- Tooltip text ---
+#
+# Hovering a label on the map shows `summary:` (what happened) and
+# `evidence:` (a log-like line). Built-in formats ship both; override them
+# per entry, or add them to custom regex entries. They are templates over
+# the regex groups ({src_ip}, {dst_port}, any named group); the raw log line
+# is never sent, so only what a template names becomes public. A `uri`
+# group also provides {path} (query string dropped, ID-like parts masked);
+# a `status` group provides {status_text} and {status_hint}.
+#
+# - match: "/host-logs/myapp/myapp.log"
+#   regex: '... (?P<src_ip>\S+) ... (?P<action>\w+) ...'
+#   summary: "Blocked by myapp"
+#   evidence: "myapp: {action} from {src_ip}"
+#
 # --- Advanced: fully custom regex ---
 #
 # Only needed if none of the built-ins match. Use named groups for any of

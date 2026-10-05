@@ -209,6 +209,63 @@ body {
     white-space: nowrap;
 }
 
+/* labels explain themselves; the tooltip renders at the overlay root (overlay.js) */
+.tag-tip {
+    cursor: help;
+}
+
+.tag-tip:focus-visible {
+    outline: 1px solid var(--accent);
+    outline-offset: 1px;
+}
+
+.tooltip {
+    position: fixed;
+    left: 0;
+    top: 0;
+    z-index: 20;
+    width: max-content;
+    max-width: min(320px, calc(100vw - 16px));
+    padding: 10px 12px;
+    pointer-events: none;
+    background: rgba(9, 14, 24, 0.94);
+    border: 1px solid var(--panel-border);
+    border-radius: 10px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+    font-size: 12px;
+    line-height: 1.45;
+}
+
+.tooltip-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 6px;
+}
+
+.tooltip-port {
+    color: var(--text-muted);
+    font-size: 11px;
+    overflow-wrap: anywhere;
+}
+
+.tooltip-summary {
+    margin: 0;
+    color: var(--text);
+}
+
+.tooltip-evidence {
+    display: block;
+    margin-top: 8px;
+    padding: 6px 8px;
+    border-radius: 6px;
+    background: rgba(148, 163, 184, 0.1);
+    color: var(--text-muted);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    overflow-wrap: anywhere;
+}
+
 /* port scans: one-line expandable bar pinned above the feed (overlay.js) */
 .scans {
     flex: none;

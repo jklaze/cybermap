@@ -117,6 +117,8 @@ Works with any number of sources, in any host directories, including rotated log
      format: nginx-access
    ```
 
+   Hovering a service label on the map shows what the event is, the targeted port/service, and a sanitized log line. Built-in formats provide this via `summary:`/`evidence:` templates over their captured fields (never the raw line, so usernames, hostnames, query strings and host network details stay private); custom entries can add their own — see the comments in `parsers.yml`.
+
    To skip lines you don't want plotted (healthy responses, monitoring bots), add `exclude:` with a regex or a list of regexes to the entry.
 
    If a format mostly works but a field is wrong, override it under `defaults:` (regex-captured fields always win — `defaults` only fills in what the regex doesn't capture). For unsupported log shapes, write a custom `regex:` with named groups — see the comments at the bottom of `parsers.yml`.

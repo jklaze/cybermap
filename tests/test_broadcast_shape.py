@@ -69,3 +69,13 @@ def test_every_service_label_has_a_color():
 
     labels = set(PORTMAP.values()) | {"SCAN", "OTHER"}
     assert labels <= set(ams.SERVICE_RGB), labels - set(ams.SERVICE_RGB)
+
+
+def test_shape_traffic_message_forwards_tooltip_fields():
+    payload = traffic_payload()
+    payload.update(summary="SSH password guessing", service="SSH", evidence="sshd: Failed password from 1.2.3.4 port 4444")
+    msg = ams.shape_message(payload)
+    assert msg["summary"] == "SSH password guessing"
+    assert msg["service"] == "SSH"
+    assert msg["evidence"].startswith("sshd: Failed password")
+    assert msg["dst_port"] == "22"

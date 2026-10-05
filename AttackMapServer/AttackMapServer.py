@@ -52,6 +52,8 @@ SERVICE_RGB = {
 FORWARDED_KEYS = (
     "src_ip", "dst_ip", "src_port", "dst_port",
     "city", "country", "iso_code", "event_time",
+    # tooltip: what the attack is, the targeted service, sanitized log evidence
+    "summary", "service", "evidence",
 )
 
 log = logging.getLogger("attack-map-server")

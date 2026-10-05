@@ -2,7 +2,7 @@
 // Subscribes to the "attack" / "ws-status" CustomEvents dispatched by map.js.
 
 import { h, render } from "https://esm.sh/preact@10.24.3";
-import { useState } from "https://esm.sh/preact@10.24.3/hooks";
+import { useLayoutEffect, useRef, useState } from "https://esm.sh/preact@10.24.3/hooks";
 import { signal } from "https://esm.sh/@preact/signals@1.3.0?deps=preact@10.24.3";
 import htm from "https://esm.sh/htm@3.1.1";
 
@@ -18,6 +18,9 @@ const stats = signal({ events: 0, ips: 0, countries: 0 });
 const feed = signal([]);
 const scans = signal({ recent: [], count: 0, ips: new Set() });
 const scansOpen = signal(false);
+// Hovered/focused label: { info, el }. One tooltip lives at the overlay root
+// because panels use backdrop-filter, which would trap a fixed-position child.
+const tip = signal(null);
 const countries = signal([]);
 const sources = signal([]);
 
@@ -75,6 +78,11 @@ window.addEventListener("attack", (e) => {
         city: msg.city,
         protocol: msg.protocol || "OTHER",
         color: msg.color || "#888888",
+        // tooltip: built server-side from parsed fields only, never raw log lines
+        summary: msg.summary,
+        port: msg.dst_port,
+        service: msg.service,
+        evidence: msg.evidence,
     };
 
     if (row.protocol === SCAN_PROTOCOL) {
@@ -126,14 +134,93 @@ function StatsBar() {
     </header>`;
 }
 
+// A service label that explains itself on hover, keyboard focus, or tap.
+// `hoverOnly` is for labels inside another control (the scans bar button),
+// where focus and clicks belong to that control.
+function Tag({ info, hoverOnly = false }) {
+    const show = (e) => (tip.value = { info, el: e.currentTarget });
+    const hide = () => (tip.value = null);
+    return html`<span
+        class="tag tag-tip"
+        tabindex=${hoverOnly ? undefined : "0"}
+        style=${tagStyle(info.color)}
+        onMouseEnter=${show}
+        onMouseLeave=${hide}
+        onFocus=${hoverOnly ? undefined : show}
+        onBlur=${hoverOnly ? undefined : hide}
+        onClick=${hoverOnly ? undefined : (e) => (tip.value?.info === info ? hide() : show(e))}
+    >${info.label || info.protocol}</span>`;
+}
+
+const GAP = 10;
+const EDGE = 8;
+
+function Tooltip() {
+    const ref = useRef(null);
+    const current = tip.value;
+    // Re-render (and re-measure) when the lists change: a new attack shifts
+    // the hovered row down, and a row can drop off the end of the list.
+    feed.value;
+    scans.value;
+
+    // Place beside the label (the feed sits bottom-left, so the right side is
+    // usually free); fall back to above/below on narrow screens. Measured after
+    // render so the real size is used, then clamped into the viewport.
+    useLayoutEffect(() => {
+        const el = ref.current;
+        if (!el || !current) return;
+        if (!current.el.isConnected) {
+            tip.value = null; // label scrolled off the list while hovered
+            return;
+        }
+        const rect = current.el.getBoundingClientRect();
+        const w = el.offsetWidth;
+        const hgt = el.offsetHeight;
+        const vw = window.innerWidth;
+        const vh = window.innerHeight;
+        let left;
+        let top;
+        if (vw - rect.right >= w + GAP + EDGE) {
+            left = rect.right + GAP;
+            top = rect.top + rect.height / 2 - hgt / 2;
+        } else {
+            left = rect.right - w;
+            top = rect.top - hgt - GAP >= EDGE ? rect.top - hgt - GAP : rect.bottom + GAP;
+        }
+        el.style.left = `${Math.max(EDGE, Math.min(left, vw - w - EDGE))}px`;
+        el.style.top = `${Math.max(EDGE, Math.min(top, vh - hgt - EDGE))}px`;
+        el.style.visibility = "visible";
+    });
+
+    if (!current) return null;
+    const { info } = current;
+    const port =
+        info.port && info.port !== "0" ? `port ${info.port} · ${info.service || "no known service"}` : info.service;
+    return html`<div class="tooltip" ref=${ref} role="tooltip" style=${{ visibility: "hidden" }}>
+        <div class="tooltip-head">
+            <span class="tag" style=${tagStyle(info.color)}>${info.label || info.protocol}</span>
+            ${port && html`<span class="tooltip-port">${port}</span>`}
+        </div>
+        <p class="tooltip-summary">${info.summary || "No details recorded for this event."}</p>
+        ${info.evidence && html`<code class="tooltip-evidence">${info.evidence}</code>`}
+    </div>`;
+}
+
 function FeedRow({ row }) {
     return html`<li class="feed-row">
         <span class="feed-time">${row.time}</span>
         <${Flag} code=${row.code} />
         <span class="feed-ip" title="${row.city ? row.city + ", " : ""}${row.country || ""}">${row.ip}</span>
-        <span class="tag" style=${tagStyle(row.color)}>${row.protocol}</span>
+        <${Tag} info=${row} />
     </li>`;
 }
+
+const SCAN_INFO = {
+    protocol: SCAN_PROTOCOL,
+    summary:
+        "Port scans: probes to ports with no service behind them, blocked by the firewall. " +
+        "Expand to see the latest ones; hover a scan's label for its log line.",
+};
 
 function ScanBar() {
     const { recent, count, ips } = scans.value;
@@ -149,7 +236,7 @@ function ScanBar() {
             onClick=${() => (scansOpen.value = !scansOpen.value)}
         >
             <span class="scan-chevron">${open ? "▾" : "▸"}</span>
-            <span class="tag" style=${tagStyle(color)}>${SCAN_PROTOCOL}</span>
+            <${Tag} info=${{ ...SCAN_INFO, color }} hoverOnly=${true} />
             <span class="scan-summary">
                 ${count === 0
                     ? "no port scans yet"
@@ -218,6 +305,7 @@ function App() {
             <${RankPanel} title="top sources" rows=${sources.value} mono=${true} />
             <${Legend} />
         </aside>
+        <${Tooltip} />
     `;
 }
 

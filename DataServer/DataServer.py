@@ -35,7 +35,7 @@ import maxminddb
 import redis
 import yaml
 
-from const import META, PORTMAP
+from const import META, PORT_NAMES, PORTMAP
 
 REDIS_HOST = os.environ.get("REDIS_HOST", "127.0.0.1")
 REDIS_PORT = int(os.environ.get("REDIS_PORT", "6379"))
@@ -75,6 +75,7 @@ BUILTIN_FORMATS = {
     "demo-csv": {
         "regex": r"(?P<src_ip>[^,\s]+),(?P<dst_ip>[^,\s]+),(?P<src_port>\d+),(?P<dst_port>\d+),(?P<type_attack>[^,\s]+),(?P<cve_attack>[^,\s]+)\s*$",
         "defaults": {},
+        "summary": "Synthetic demo event ({type_attack})",
     },
     # Linux sshd "Failed password" lines (Debian /var/log/auth.log,
     # RHEL /var/log/secure). Optional "invalid user" prefix handled, as are
@@ -88,13 +89,17 @@ BUILTIN_FORMATS = {
             "type_attack": "ssh-bruteforce",
             "cve_attack": "N/A",
         },
+        "summary": "SSH password guessing: a wrong password was tried",
+        # The attempted username is left out: "invalid user" vs not would tell
+        # visitors which accounts exist on the host.
+        "evidence": "sshd: Failed password from {src_ip} port {src_port}",
     },
     # End of an sshd connection that reached the username stage but never
     # logged in (key-only attempts, invalid users who never sent a password).
     # once_per_connection: skipped when the connection already produced an
     # event (e.g. its "Failed password" lines), so nothing is double counted.
     "sshd-auth-end": {
-        "regex": r"sshd(?:-session)?\[\d+\]:\s+(?:Connection closed by|Disconnected from|Connection reset by) (?:authenticating|invalid) user \S* ?(?P<src_ip>[0-9a-fA-F.:]+) port (?P<src_port>\d+) \[preauth\]",
+        "regex": r"sshd(?:-session)?\[\d+\]:\s+(?P<reason>Connection closed by|Disconnected from|Connection reset by) (?:authenticating|invalid) user \S* ?(?P<src_ip>[0-9a-fA-F.:]+) port (?P<src_port>\d+) \[preauth\]",
         "defaults": {
             "dst_ip": "0.0.0.0",
             "dst_port": "22",
@@ -102,11 +107,13 @@ BUILTIN_FORMATS = {
             "cve_attack": "N/A",
         },
         "once_per_connection": True,
+        "summary": "SSH login attempt that gave up without a password (key-only or unknown user)",
+        "evidence": "sshd: {reason} {src_ip} port {src_port} [preauth]",
     },
     # sshd connections dropped before authentication: port scanners, banner
     # grabbers, clients offering obsolete key exchange. Once per connection.
     "sshd-scan": {
-        "regex": r"sshd(?:-session)?\[\d+\]:\s+(?:Connection (?:closed|reset) by|Unable to negotiate with|banner exchange: Connection from) (?P<src_ip>[0-9a-fA-F.:]+) port (?P<src_port>\d+)",
+        "regex": r"sshd(?:-session)?\[\d+\]:\s+(?P<reason>Connection (?:closed|reset) by|Unable to negotiate with|banner exchange: Connection from) (?P<src_ip>[0-9a-fA-F.:]+) port (?P<src_port>\d+)",
         "defaults": {
             "dst_ip": "0.0.0.0",
             "dst_port": "22",
@@ -114,45 +121,58 @@ BUILTIN_FORMATS = {
             "cve_attack": "N/A",
         },
         "once_per_connection": True,
+        "summary": "SSH probe: connection dropped before login (port scanner or banner grabber)",
+        "evidence": "sshd: {reason} {src_ip} port {src_port}",
     },
     # UFW firewall BLOCK lines (TCP/UDP). ICMP-only blocks lack SPT/DPT
     # and will not match — that's intentional.
     "ufw": {
-        "regex": r"\[UFW BLOCK\].*SRC=(?P<src_ip>\S+).*DST=(?P<dst_ip>\S+).*PROTO=(?P<type_attack>\S+).*SPT=(?P<src_port>\d+).*DPT=(?P<dst_port>\d+)",
+        "regex": r"\[UFW BLOCK\].*SRC=(?P<src_ip>\S+).*DST=(?P<dst_ip>\S+).*PROTO=(?P<type_attack>\S+).*SPT=(?P<src_port>\d+).*DPT=(?P<dst_port>\d+)(?: WINDOW=\d+ RES=0x[0-9a-fA-F]+ (?P<flags>(?:[A-Z]{3} )+)URGP)?",
         "defaults": {"cve_attack": "N/A"},
+        "summary": "Firewall blocked an unsolicited {type_attack} connection",
+        # DST, MAC and interface names stay out: they describe the host, not the attacker.
+        "evidence": "UFW BLOCK {type_attack} SRC={src_ip} SPT={src_port} DPT={dst_port} {flags}",
     },
     # nginx "combined" access log (the default for most distros).
     "nginx-access": {
-        "regex": r'^(?P<src_ip>\S+) \S+ \S+ \[[^\]]+\] "(?P<type_attack>\S+) [^"]*" \d+ \d+',
+        "regex": r'^(?P<src_ip>\S+) \S+ \S+ \[[^\]]+\] "(?P<type_attack>\S+)(?: (?P<uri>\S+))?[^"]*" (?P<status>\d+) \d+',
         "defaults": {
             "dst_ip": "0.0.0.0",
             "src_port": "0",
             "dst_port": "80",
             "cve_attack": "N/A",
         },
+        "summary": "Web request answered {status} ({status_text}): {status_hint}",
+        "evidence": "{type_attack} {path} → {status}",
     },
     # Apache "combined" access log (same shape as nginx-combined).
     "apache-access": {
-        "regex": r'^(?P<src_ip>\S+) \S+ \S+ \[[^\]]+\] "(?P<type_attack>\S+) [^"]*" \d+ \d+',
+        "regex": r'^(?P<src_ip>\S+) \S+ \S+ \[[^\]]+\] "(?P<type_attack>\S+)(?: (?P<uri>\S+))?[^"]*" (?P<status>\d+) \d+',
         "defaults": {
             "dst_ip": "0.0.0.0",
             "src_port": "0",
             "dst_port": "80",
             "cve_attack": "N/A",
         },
+        "summary": "Web request answered {status} ({status_text}): {status_hint}",
+        "evidence": "{type_attack} {path} → {status}",
     },
     # Caddy v2 JSON access log (`log { output file ... }`, default encoder).
     # Caddy's zap encoder emits request keys in a fixed order (remote_ip,
     # remote_port, client_ip, proto, method). client_ip is the real client
     # even behind trusted proxies. Most traffic is TLS, so dst_port is 443.
     "caddy-json": {
-        "regex": r'"msg":"handled request".*?"client_ip":"(?P<src_ip>[^"]+)".*?"method":"(?P<type_attack>[^"]+)"',
+        "regex": r'"msg":"handled request".*?"client_ip":"(?P<src_ip>[^"]+)".*?"method":"(?P<type_attack>[^"]+)".*?"uri":"(?P<uri>(?:[^"\\]|\\.)*)".*?"status":(?P<status>\d{3})',
         "defaults": {
             "dst_ip": "0.0.0.0",
             "src_port": "0",
             "dst_port": "443",
             "cve_attack": "N/A",
         },
+        "summary": "Web request answered {status} ({status_text}): {status_hint}",
+        # Host is left out (it names your sites); the path loses its query
+        # string and anything token-like (see sanitize_path).
+        "evidence": "{type_attack} {path} → {status}",
     },
     # fail2ban "Ban <ip>" action lines.
     "fail2ban": {
@@ -163,8 +183,31 @@ BUILTIN_FORMATS = {
             "dst_port": "0",
             "cve_attack": "N/A",
         },
+        "summary": "Banned by fail2ban after repeated failures (jail {type_attack})",
+        "evidence": "fail2ban [{type_attack}] Ban {src_ip}",
     },
 }
+
+HTTP_STATUS_TEXT = {
+    400: "bad request", 401: "login required", 403: "forbidden", 404: "not found",
+    405: "method not allowed", 408: "request timeout", 429: "rate limited",
+    499: "client gave up", 500: "server error", 502: "bad gateway",
+    503: "service unavailable", 504: "gateway timeout",
+}
+TOOLTIP_MAX_LEN = 120
+
+
+def _status_hint(code: int) -> str:
+    """What an HTTP status usually means when it shows up on an attack map."""
+    if code in (401, 403):
+        return "someone tried a protected page"
+    if code == 499:
+        return "the client hung up before the answer"
+    if 400 <= code < 500:
+        return "usually a bot probing for leaked files or vulnerable apps"
+    if code >= 500:
+        return "the backend failed to answer (may not be an attack)"
+    return "ordinary request"
 
 log = logging.getLogger("data-server")
 
@@ -187,16 +230,19 @@ unknowns: dict = {}
 
 
 class Parser:
-    __slots__ = ("name", "match", "regex", "defaults", "exclude", "once_per_connection")
+    __slots__ = ("name", "match", "regex", "defaults", "exclude", "once_per_connection",
+                 "summary", "evidence")
 
     def __init__(self, name: str, match: str, regex: str, defaults: dict, exclude=(),
-                 once_per_connection: bool = False):
+                 once_per_connection: bool = False, summary=None, evidence=None):
         self.name = name
         self.match = match
         self.regex = re.compile(regex)
         self.defaults = defaults
         self.exclude = [re.compile(x) for x in exclude]
         self.once_per_connection = once_per_connection
+        self.summary = summary
+        self.evidence = evidence
 
 
 class RecentConnections:
@@ -229,7 +275,8 @@ def load_parsers(path: str) -> list:
     `defaults:` are merged on top of the built-in defaults when using `format:`.
     An optional `exclude:` (regex or list of regexes) drops matching lines.
     `once_per_connection:` (bool, built-in default per format) skips lines whose
-    (src_ip, src_port) already produced an event.
+    (src_ip, src_port) already produced an event. `summary:` / `evidence:` are
+    tooltip templates over the regex groups (see describe()).
     """
     with open(path) as f:
         data = yaml.safe_load(f) or []
@@ -261,18 +308,23 @@ def load_parsers(path: str) -> list:
                 regex = fmt["regex"]
                 defaults = {**fmt["defaults"], **user_defaults}
                 once = entry.get("once_per_connection", fmt.get("once_per_connection", False))
+                summary = entry.get("summary", fmt.get("summary"))
+                evidence = entry.get("evidence", fmt.get("evidence"))
                 name = entry.get("name", fmt_name)
             elif "regex" in entry:
                 regex = entry["regex"]
                 defaults = user_defaults
                 once = entry.get("once_per_connection", False)
+                summary = entry.get("summary")
+                evidence = entry.get("evidence")
                 name = entry.get("name", f"parser-{i}")
             else:
                 log.error("parsers.yml entry #%d: must specify `format:` or `regex:`", i)
                 sys.exit(1)
 
             parsers.append(Parser(name=name, match=match, regex=regex, defaults=defaults,
-                                  exclude=exclude, once_per_connection=bool(once)))
+                                  exclude=exclude, once_per_connection=bool(once),
+                                  summary=summary, evidence=evidence))
         except (KeyError, re.error) as exc:
             log.error("invalid parser entry #%d in %s: %s", i, path, exc)
             sys.exit(1)
@@ -281,6 +333,73 @@ def load_parsers(path: str) -> list:
         sys.exit(1)
     log.info("loaded %d parser(s) from %s", len(parsers), path)
     return parsers
+
+
+_CONTROL_CHARS = re.compile(r"[\x00-\x1f\x7f]")
+_TOKEN_LIKE = re.compile(r"^(?=.*[A-Za-z])(?=.*\d)[^/]{10,}$")
+
+
+def _clip(text: str) -> str:
+    text = _CONTROL_CHARS.sub("", text)
+    return text if len(text) <= TOOLTIP_MAX_LEN else text[: TOOLTIP_MAX_LEN - 1] + "…"
+
+
+def sanitize_path(uri: str) -> str:
+    """Request path that's safe to show publicly.
+
+    Drops the query string/fragment (tokens, emails, search terms) and masks
+    path segments that look like IDs or secrets (share links, session ids):
+    10+ chars mixing letters and digits, or containing '@'. Probe paths like
+    /wp-login.php or /.env survive unchanged.
+    """
+    path = re.split(r"[?#]", uri or "", maxsplit=1)[0] or "/"
+    segments = [
+        "*" if ("@" in seg or _TOKEN_LIKE.match(seg)) else seg
+        for seg in path.split("/")
+    ]
+    return _clip("/".join(segments))
+
+
+def _status_text(status: str) -> str:
+    try:
+        code = int(status)
+    except (TypeError, ValueError):
+        return ""
+    if code in HTTP_STATUS_TEXT:
+        return HTTP_STATUS_TEXT[code]
+    return {2: "ok", 3: "redirect", 4: "client error", 5: "server error"}.get(code // 100, "")
+
+
+class _Blank(dict):
+    def __missing__(self, key):
+        return ""
+
+
+def describe(template, fields: dict):
+    """Fill a summary/evidence template from parsed fields; None if no template.
+
+    Only regex-captured fields reach the template (never the raw line), so a
+    template decides exactly what a public tooltip may reveal. Derived fields:
+    `path` (sanitize_path of `uri`), `status_text` and `status_hint`.
+    """
+    if not template:
+        return None
+    values = _Blank({k: str(v) for k, v in fields.items() if v is not None})
+    if "uri" in fields:
+        uri = fields["uri"] or ""
+        try:
+            uri = json.loads(f'"{uri}"')  # Caddy JSON-escapes the URI
+        except ValueError:
+            pass
+        values["path"] = sanitize_path(uri)
+    values["status_text"] = _status_text(fields.get("status"))
+    if str(fields.get("status") or "").isdigit():
+        values["status_hint"] = _status_hint(int(fields["status"]))
+    try:
+        text = template.format_map(values)
+    except (ValueError, IndexError):
+        return None
+    return _clip(" ".join(text.split()))
 
 
 def parse_line(source_path: str, line: str, parsers: list, recent=None):
@@ -310,7 +429,12 @@ def parse_line(source_path: str, line: str, parsers: list, recent=None):
                     excluded = True
                     continue
                 recent.add(key)
-            return {f: out[f] for f in REQUIRED_FIELDS}
+            result = {f: out[f] for f in REQUIRED_FIELDS}
+            for field, template in (("summary", p.summary), ("evidence", p.evidence)):
+                text = describe(template, out)
+                if text:
+                    result[field] = text
+            return result
     return EXCLUDED if excluded else None
 
 
@@ -614,6 +738,10 @@ def main() -> None:
         event_count += 1
         flat_geo = clean_db(raw_geo)
         proto = get_service(parsed["dst_port"])
+        try:
+            service = PORT_NAMES.get(int(parsed["dst_port"]))
+        except (TypeError, ValueError):
+            service = None
 
         super_dict = merge_dicts(
             hq_dict,
@@ -622,6 +750,7 @@ def main() -> None:
             {"msg_type2": parsed["type_attack"]},
             {"msg_type3": parsed["cve_attack"]},
             {"protocol": proto},
+            {"service": service},
             parsed,
         )
 

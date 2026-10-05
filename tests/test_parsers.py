@@ -18,12 +18,13 @@ CADDY_LINE = (
 
 def _parser(fmt, match="/host-logs/x/access.log"):
     spec = ds.BUILTIN_FORMATS[fmt]
-    return ds.Parser(name=fmt, match=match, regex=spec["regex"], defaults=spec["defaults"])
+    return ds.Parser(name=fmt, match=match, regex=spec["regex"], defaults=spec["defaults"],
+                     summary=spec.get("summary"), evidence=spec.get("evidence"))
 
 
 def test_caddy_json_uses_client_ip_and_method():
     out = ds.parse_line("/host-logs/x/access.log", CADDY_LINE, [_parser("caddy-json")])
-    assert out == {
+    assert {k: out[k] for k in ds.REQUIRED_FIELDS} == {
         "src_ip": "192.53.169.77",
         "dst_ip": "0.0.0.0",
         "src_port": "0",
